@@ -28,7 +28,6 @@ fn main() {
     // Collecting the command line arguments into a vector and printing them
     let args: Vec<String> = env::args().collect();
 
-
     // TODO: Implement the argv "scanner". It will run through the command line argument
     // and map the arguments to the functions. Note that arguments can have a long and short form.
     // Also note, that in case you have more or unknown arguments, you should let the user know that
@@ -39,6 +38,11 @@ fn main() {
         // exit with success code
         std::process::exit(0);
     }
-    
-}
 
+    // Handle error
+    if args.len() < 2 && (args[1] == "--scan" || args[1] == "-s") {
+        println!("Please provide an IP address to scan");
+        // exit with error code
+        std::process::exit(1);
+    }
+}
