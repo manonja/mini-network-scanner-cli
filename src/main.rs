@@ -4,15 +4,14 @@ use rand::prelude::*;
 use socket2::Protocol;
 use socket2::SockAddr;
 use socket2::{Domain, Socket, Type};
+use std::env;
 use std::mem::MaybeUninit;
 use std::net::Ipv4Addr;
 use std::net::SocketAddr;
-use std::os::fd::AsRawFd;
 use std::time::Duration;
-use std::{env, io};
 mod types;
-use std::error::Error;
 use std::mem;
+use std::os::unix::io::AsRawFd;
 use types::TcpHeader;
 
 const DEFAULT_PORT: u16 = 80;
@@ -108,15 +107,10 @@ fn create_syn_packet(
 // }
 
 fn pack_tcp_header(header: &TcpHeader) -> Vec<u8> {
+    // The TCP header length is 20 bytes, plus 4 bytes for each option
     let header_length_in_32_bit_words = 5 + header.options.capacity();
     let mut packed_header = Vec::with_capacity(header_length_in_32_bit_words * 4);
 
-    // println!("Header options length: {}", header.options.capacity());
-    // println!(
-    //     "Header length in 32-bit words: {}",
-    //     header_length_in_32_bit_words
-    // );
-    // println!("Packed header: {:#04x?}", packed_header);
     packed_header.extend_from_slice(&header.source_port.to_be_bytes());
     packed_header.extend_from_slice(&header.destination_port.to_be_bytes());
     packed_header.extend_from_slice(&header.sequence_number.to_be_bytes());
@@ -135,6 +129,7 @@ fn pack_tcp_header(header: &TcpHeader) -> Vec<u8> {
         | ((header.flags_rst as u8) << 2)
         | ((header.flags_syn as u8) << 1)
         | (header.flags_fin as u8);
+
     packed_header.push(flags);
 
     packed_header.extend_from_slice(&header.window.to_be_bytes());
@@ -227,6 +222,41 @@ fn compute_ip_checksum(header: &[u8]) -> u16 {
     !sum as u16
 }
 
+/// Creates an IPv4 packet with the given parameters
+fn create_ip_packet(
+    total_length: u16,
+    source_ip: &Ipv4Addr,
+    dest_ip: &Ipv4Addr,
+    protocol: u8,
+) -> Vec<u8> {
+    let mut packet = Vec::with_capacity(20); // IPv4 header is 20 bytes
+
+    // Version (4) and IHL (5 words = 20 bytes) combined: 0x45
+    packet.push(0x45);
+    // DSCP (0) and ECN (0)
+    packet.push(0x00);
+    // Total Length (16 bits)
+    packet.extend_from_slice(&total_length.to_be_bytes());
+    // Identification (16 bits)
+    packet.extend_from_slice(&[0x00, 0x00]);
+    // Flags (Don't Fragment) and Fragment Offset
+    packet.extend_from_slice(&[0x40, 0x00]);
+    // TTL (64) and Protocol
+    packet.extend_from_slice(&[64, protocol]);
+    // Header Checksum (will be filled later)
+    packet.extend_from_slice(&[0x00, 0x00]);
+
+    // Source and Destination IPs using flat_map
+    packet.extend([source_ip, dest_ip].iter().flat_map(|ip| ip.octets()));
+
+    // Compute and set IP header checksum
+    let checksum = compute_ip_checksum(&packet);
+    packet[10] = (checksum >> 8) as u8;
+    packet[11] = checksum as u8;
+
+    packet
+}
+
 // TODO: Implement a function that prints out the help message on the screen.
 fn help(program_name: &str) {
     let help_message = format!("
@@ -258,42 +288,30 @@ fn help(program_name: &str) {
     println!("{}", help_message);
 }
 
-// Construct the complete IP packet
-fn construct_ip_packet(
+// Construct the complete TCP/IP packet
+fn construct_tcp_ip_packet(
     tcp_header: &TcpHeader,
     source_ip: &Ipv4Addr,
     dest_ip: &Ipv4Addr,
 ) -> Vec<u8> {
-    let mut packet = Vec::new();
+    // First create the TCP header with checksum
+    let tcp_packet = pack_tcp_header(tcp_header);
 
     // Calculate total length (IP header + TCP header + options)
-    let tcp_header_len = 20 + tcp_header.options.len() * 4; // TCP header + options
-    let total_length: u16 = (20 + tcp_header_len) as u16; // IP header + TCP size
+    let total_length = (20 + tcp_packet.len()) as u16;
 
-    // IP Header (20 bytes)
-    packet.extend_from_slice(&[
-        0x45, 0x00, // Version, IHL, DSCP, ECN
-    ]);
-    packet.extend_from_slice(&total_length.to_be_bytes()); // Total Length in network byte order
-    packet.extend_from_slice(&[
-        0x00, 0x00, // Identification
-        0x40, 0x00, // Flags (Don't Fragment), Fragment Offset
-        0x40, 0x06, // TTL (64), Protocol (6 for TCP)
-        0x00, 0x00, // Header Checksum
-    ]);
+    // Create IP packet
+    let mut packet = create_ip_packet(
+        total_length,
+        source_ip,
+        dest_ip,
+        6, // TCP protocol number
+    );
 
-    // Add source and destination IPs
-    packet.extend_from_slice(&source_ip.octets());
-    packet.extend_from_slice(&dest_ip.octets());
+    // Add TCP header and data
+    packet.extend_from_slice(&tcp_packet);
 
-    // Add TCP header
-    let packed_tcp = pack_tcp_header(tcp_header);
-    packet.extend_from_slice(&packed_tcp);
-
-    // Calculate IP header checksum
-    let ip_checksum = compute_ip_checksum(&packet[..20]);
-    packet[10] = (ip_checksum >> 8) as u8;
-    packet[11] = ip_checksum as u8;
+    println!("IP packet: {:#04x?}", packet);
 
     packet
 }
@@ -330,7 +348,7 @@ fn scan_single_port(
     println!("  Checksum computed: 0x{:04x}", syn_packet.checksum);
 
     println!("\n📄 Constructing IP packet...");
-    let complete_packet = construct_ip_packet(&syn_packet, source_ip, dest_ip);
+    let complete_packet = construct_tcp_ip_packet(&syn_packet, source_ip, dest_ip);
     println!("  Total size: {} bytes", complete_packet.len());
     println!(
         "  First 20 bytes (IP header): {:02x?}",
@@ -362,20 +380,33 @@ fn scan_single_port(
     // println!("  Socket bound successfully");
 
     // Let's follow standard unix steps to bind to socket but then using socket2 for thin wrapper
-    let socket = Socket::new(Domain::IPV4, Type::RAW, Some(Protocol::from(0)))?;
+    let socket = Socket::new(Domain::IPV4, Type::RAW, Some(Protocol::TCP))?;
+
+    // With setsockopt we tell the kernel not to generate an IP header, since we are providing it ourselves.
+    let one: i32 = 1;
+    unsafe {
+        libc::setsockopt(
+            socket.as_raw_fd(),
+            libc::IPPROTO_IP,
+            libc::IP_HDRINCL,
+            &one as *const i32 as *const libc::c_void,
+            std::mem::size_of_val(&one) as libc::socklen_t,
+        )
+    };
+
     // Initialise a `SocketAddr` byte calling `getsockname(2)`.
     let mut addr_storage: libc::sockaddr_storage = unsafe { mem::zeroed() };
     let mut len = mem::size_of_val(&addr_storage) as libc::socklen_t;
     // The `getsockname(2)` system call will intiliase `storage` for
     // us, setting `len` to the correct length.
-    let res = unsafe {
+    let sock_name = unsafe {
         libc::getsockname(
             socket.as_raw_fd(),
             (&mut addr_storage as *mut libc::sockaddr_storage).cast(),
             &mut len,
         )
     };
-    if res == -1 {
+    if sock_name == -1 {
         return Err(std::io::Error::last_os_error());
     }
 
@@ -499,7 +530,7 @@ fn main() -> std::io::Result<()> {
                 println!("Target: {}:{}", dest_ip, destination_port);
 
                 println!("\n📡 Creating raw socket...");
-                let socket = Socket::new_raw(Domain::IPV4, Type::RAW, Some(Protocol::from(0)))?; // Use Protocol::RAW
+                let socket = Socket::new(Domain::IPV4, Type::RAW, Some(Protocol::TCP))?; // Use Protocol::RAW
                 println!("  Raw socket created");
 
                 socket.set_header_included_v4(true)?;
