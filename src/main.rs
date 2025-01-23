@@ -335,35 +335,13 @@ fn scan_single_port(
 
     println!("\n🔌 Configuring socket...");
     
-    // Create proper sockaddr_in structure for binding
-    // We use port 0 to let the kernel choose a random port.
-    let bind_addr = SockAddr::from(SocketAddr::new((*source_ip).into(), 0));
-    println!("  Created bind address");
-    
-    socket.bind(&bind_addr).unwrap();
-    let local_addr = socket.local_addr().unwrap();
-    println!("  Socket bound successfully {:?}", local_addr.as_socket_ipv4().unwrap().port());
-
-    // Set IP_HDRINCL after binding
-    unsafe {
-        let hdrincl: libc::c_int = 1;
-        let result = libc::setsockopt(
-            socket.as_raw_fd(),
-            libc::IPPROTO_IP,
-            libc::IP_HDRINCL,
-            &hdrincl as *const _ as *const libc::c_void,
-            std::mem::size_of_val(&hdrincl) as libc::socklen_t,
-        );
-        if result == -1 {
-            println!("  ⚠️  Failed to set IP_HDRINCL");
-        } else {
-            println!("  IP_HDRINCL set manually");
-        }
-    }
-
     // Create destination sockaddr
     let dest_addr = SockAddr::from(SocketAddr::new((*dest_ip).into(), dest_port));
     println!("  Created destination socket:");
+
+    // Let's get our own sending port
+    let local_addr = socket.local_addr().unwrap();
+    println!("  Local address: {:?}", local_addr);
 
     // Send the packet without connect()
     println!("\n📤 Sending SYN packet...");
