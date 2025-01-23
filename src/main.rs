@@ -1,16 +1,18 @@
 use pnet_packet::ip::IpNextHeaderProtocol;
 use pnet_packet::util::ipv4_checksum;
-use std::os::fd::AsRawFd;
-use socket2::Protocol;
-use std::net::SocketAddr;
-use socket2::SockAddr;
 use rand::prelude::*;
+use socket2::Protocol;
+use socket2::SockAddr;
 use socket2::{Domain, Socket, Type};
-use std::env;
 use std::mem::MaybeUninit;
 use std::net::Ipv4Addr;
+use std::net::SocketAddr;
+use std::os::fd::AsRawFd;
 use std::time::Duration;
+use std::{env, io};
 mod types;
+use std::error::Error;
+use std::mem;
 use types::TcpHeader;
 
 const DEFAULT_PORT: u16 = 80;
@@ -263,21 +265,21 @@ fn construct_ip_packet(
     dest_ip: &Ipv4Addr,
 ) -> Vec<u8> {
     let mut packet = Vec::new();
-    
+
     // Calculate total length (IP header + TCP header + options)
-    let tcp_header_len = 20 + tcp_header.options.len() * 4;  // TCP header + options
-    let total_length: u16 = (20 + tcp_header_len) as u16;  // IP header + TCP size
-    
+    let tcp_header_len = 20 + tcp_header.options.len() * 4; // TCP header + options
+    let total_length: u16 = (20 + tcp_header_len) as u16; // IP header + TCP size
+
     // IP Header (20 bytes)
     packet.extend_from_slice(&[
-        0x45, 0x00,                         // Version, IHL, DSCP, ECN
+        0x45, 0x00, // Version, IHL, DSCP, ECN
     ]);
     packet.extend_from_slice(&total_length.to_be_bytes()); // Total Length in network byte order
     packet.extend_from_slice(&[
-        0x00, 0x00,                         // Identification
-        0x40, 0x00,                         // Flags (Don't Fragment), Fragment Offset
-        0x40, 0x06,                         // TTL (64), Protocol (6 for TCP)
-        0x00, 0x00,                         // Header Checksum
+        0x00, 0x00, // Identification
+        0x40, 0x00, // Flags (Don't Fragment), Fragment Offset
+        0x40, 0x06, // TTL (64), Protocol (6 for TCP)
+        0x00, 0x00, // Header Checksum
     ]);
 
     // Add source and destination IPs
@@ -311,10 +313,10 @@ fn scan_single_port(
     dest_port: u16,
 ) -> std::io::Result<PortState> {
     println!("\n📦 Creating SYN packet...");
-    
+
     let source_port = rand::thread_rng().gen_range(32768..65535);
     println!("  Selected source port: {}", source_port);
-    
+
     let options = create_test_vector(6);
     let mut syn_packet = create_syn_packet(source_port, dest_port, options);
     println!("  SYN packet created");
@@ -330,26 +332,80 @@ fn scan_single_port(
     println!("\n📄 Constructing IP packet...");
     let complete_packet = construct_ip_packet(&syn_packet, source_ip, dest_ip);
     println!("  Total size: {} bytes", complete_packet.len());
-    println!("  First 20 bytes (IP header): {:02x?}", &complete_packet[..20]);
-    println!("  Next 20 bytes (TCP header): {:02x?}", &complete_packet[20..40]);
+    println!(
+        "  First 20 bytes (IP header): {:02x?}",
+        &complete_packet[..20]
+    );
+    println!(
+        "  Next 20 bytes (TCP header): {:02x?}",
+        &complete_packet[20..40]
+    );
 
     println!("\n🔌 Configuring socket...");
-    
+
     // Create destination sockaddr
     let dest_addr = SockAddr::from(SocketAddr::new((*dest_ip).into(), dest_port));
-    println!("  Created destination socket:");
+    println!(
+        "  Created destination socket, address: {:?}, port: {}",
+        dest_addr.as_socket_ipv4().unwrap().ip(),
+        dest_addr.as_socket_ipv4().unwrap().port()
+    );
+
+    // let listener = Socket::new_raw(Domain::IPV4, Type::RAW, Some(Protocol::from(0)))?;
+    // listener.bind(&dest_addr)?;
+    // println!("  Listener bound successfully to address {:?} and port {:?}", listener.local_addr().unwrap().as_socket_ipv4().unwrap().ip(), listener.local_addr().unwrap().as_socket_ipv4().unwrap().port());
+
+    // // Next let's set-up binding. We take port 0 to let the kernel choose a random port.
+    // let bind_addr = SockAddr::from(SocketAddr::new((*source_ip).into(), 0));
+    // println!("  Created bind address, address: {:?}, port: {}", bind_addr.as_socket_ipv4().unwrap().ip(), bind_addr.as_socket_ipv4().unwrap().port());
+    // socket.bind(&bind_addr).unwrap();
+    // println!("  Socket bound successfully");
+
+    // Let's follow standard unix steps to bind to socket but then using socket2 for thin wrapper
+    let socket = Socket::new(Domain::IPV4, Type::RAW, Some(Protocol::from(0)))?;
+    // Initialise a `SocketAddr` byte calling `getsockname(2)`.
+    let mut addr_storage: libc::sockaddr_storage = unsafe { mem::zeroed() };
+    let mut len = mem::size_of_val(&addr_storage) as libc::socklen_t;
+    // The `getsockname(2)` system call will intiliase `storage` for
+    // us, setting `len` to the correct length.
+    let res = unsafe {
+        libc::getsockname(
+            socket.as_raw_fd(),
+            (&mut addr_storage as *mut libc::sockaddr_storage).cast(),
+            &mut len,
+        )
+    };
+    if res == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    let address = unsafe { SockAddr::new(addr_storage, len) };
+
+    println!(
+        "  Created bind address, address: {:?}, port: {}",
+        address.as_socket_ipv4().unwrap().ip(),
+        address.as_socket_ipv4().unwrap().port()
+    );
+    // socket.bind(&address).unwrap();
+    // println!("  Socket bound successfully");
 
     // Let's get our own sending port
     let local_addr = socket.local_addr().unwrap();
-    println!("  Local address: {:?}", local_addr);
+    println!(
+        "  Local address: {:?}",
+        local_addr.as_socket_ipv4().unwrap().port()
+    );
 
     // Send the packet without connect()
     println!("\n📤 Sending SYN packet...");
     match socket.send_to(&complete_packet, &dest_addr) {
         Ok(bytes) => println!("  ✅ Sent {} bytes successfully", bytes),
         Err(e) => {
-            println!("  ❌ Send failed: {} (code: {})", 
-                e, e.raw_os_error().unwrap_or(-1));
+            println!(
+                "  ❌ Send failed: {} (code: {})",
+                e,
+                e.raw_os_error().unwrap_or(-1)
+            );
             return Err(e);
         }
     }
@@ -362,7 +418,7 @@ fn scan_single_port(
     match socket.recv(&mut buf) {
         Ok(n) if n >= 40 => {
             println!("  Received {} bytes", n);
-            
+
             let received_data = &buf[..n];
             let buf: Vec<u8> = received_data
                 .iter()
@@ -377,11 +433,11 @@ fn scan_single_port(
                 f if f & 0x12 == 0x12 => {
                     println!("  🟢 Detected: SYN-ACK (Port Open)");
                     PortState::Open
-                },
+                }
                 f if f & 0x04 == 0x04 => {
                     println!("  🔴 Detected: RST (Port Closed)");
                     PortState::Closed
-                },
+                }
                 _ => {
                     println!("  🟡 Detected: Unknown response (Port Filtered)");
                     PortState::Filtered
@@ -391,7 +447,7 @@ fn scan_single_port(
         Ok(n) => {
             println!("  Received packet too small: {} bytes", n);
             Ok(PortState::Filtered)
-        },
+        }
         Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
             println!("  No response received (timeout)");
             Ok(PortState::Filtered)
@@ -422,10 +478,7 @@ fn main() -> std::io::Result<()> {
 
                 // Parse the IP address (arg[2])
                 let dest_ip = args[2].parse::<Ipv4Addr>().map_err(|_| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "Invalid IP address"
-                    )
+                    std::io::Error::new(std::io::ErrorKind::InvalidInput, "Invalid IP address")
                 })?;
 
                 // Get port from arguments if provided, otherwise use default
@@ -446,10 +499,10 @@ fn main() -> std::io::Result<()> {
                 println!("Target: {}:{}", dest_ip, destination_port);
 
                 println!("\n📡 Creating raw socket...");
-                let socket = Socket::new_raw(Domain::IPV4, Type::RAW, Some(Protocol::from(0)))?;  // Use Protocol::RAW
-                println!("  Raw socket created");       
+                let socket = Socket::new_raw(Domain::IPV4, Type::RAW, Some(Protocol::from(0)))?; // Use Protocol::RAW
+                println!("  Raw socket created");
 
-                socket.set_header_included_v4(true)?;         
+                socket.set_header_included_v4(true)?;
 
                 // Don't set header_included here, we'll do it after binding
                 socket.set_read_timeout(Some(Duration::from_secs(5)))?;
