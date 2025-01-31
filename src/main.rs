@@ -1,19 +1,30 @@
 use pnet_packet::ip::IpNextHeaderProtocol;
 use pnet_packet::util::ipv4_checksum;
 use socket2::Protocol;
-use socket2::{Domain, Socket, Type, SockAddr};
+#[allow(unused_imports)]
+use socket2::{Domain, SockAddr, Socket, Type};
 use std::env;
-use std::mem::MaybeUninit;
-use std::time::Duration;
+#[allow(unused_imports)]
+use std::os::raw::*;
+
+use std::net::SocketAddr;
 mod types;
+#[allow(unused_imports)]
+use libc::{in_addr, sendto, sockaddr, sockaddr_in, AF_INET, INADDR_ANY};
+#[allow(unused_imports)]
+use pnet_packet::ipv4::Ipv4;
+use rand::Rng;
+#[allow(unused_imports)]
+use std::io;
+#[allow(unused_imports)]
+use std::mem;
 use std::net::{IpAddr, Ipv4Addr};
+#[allow(unused_imports)]
 use std::os::unix::io::AsRawFd;
 use types::TcpHeader;
-use rand::Rng;
-use std::mem;
-use std::io;
 
 #[allow(clippy::too_many_arguments)]
+#[allow(dead_code)]
 fn create_tcp_packet(
     source_port: u16,
     destination_port: u16,
@@ -58,6 +69,7 @@ fn create_tcp_packet(
 
 /// Creates a TCP SYN packet (used for initiating connections)
 /// SYN packets are special TCP packets with the SYN flag set to true
+#[allow(dead_code)]
 fn create_syn_packet(source_port: u16, destination_port: u16) -> TcpHeader {
     create_tcp_packet(
         source_port,
@@ -81,6 +93,7 @@ fn create_syn_packet(source_port: u16, destination_port: u16) -> TcpHeader {
     )
 }
 
+#[allow(dead_code)]
 fn pack_tcp_header(header: &TcpHeader) -> Vec<u8> {
     // The TCP header length is 20 bytes, plus 4 bytes for each option
     let header_length_in_32_bit_words = 5 + header.options.capacity();
@@ -130,6 +143,7 @@ fn pack_tcp_header(header: &TcpHeader) -> Vec<u8> {
 /// 1. TCP pseudo-header (containing IP information)
 /// 2. TCP header (with checksum field set to 0)
 /// 3. TCP data (if any)
+#[allow(dead_code)]
 fn compute_tcp_checksum(header: &TcpHeader, source_ip: &Ipv4Addr, dest_ip: &Ipv4Addr) -> u16 {
     // Create a copy of the header and set its checksum to 0
     // This is required because the checksum field must be 0 during calculation
@@ -176,6 +190,7 @@ fn compute_tcp_checksum(header: &TcpHeader, source_ip: &Ipv4Addr, dest_ip: &Ipv4
 }
 
 /// Creates a test vector with specified capacity
+#[allow(dead_code)]
 fn create_test_vector(size: usize) -> Vec<u32> {
     let mut v: Vec<u32> = Vec::new();
     v.reserve_exact(size);
@@ -184,11 +199,12 @@ fn create_test_vector(size: usize) -> Vec<u32> {
 }
 
 /// Computes the IPv4 header checksum
+#[allow(dead_code)]
 fn compute_ip_checksum(header: &[u8]) -> u16 {
     let mut sum: u32 = 0;
     // Process 2 bytes at a time
     for i in (0..header.len()).step_by(2) {
-        sum += ((header[i] as u32) << 8 | header[i + 1] as u32) as u32;
+        sum += (header[i] as u32) << 8 | header[i + 1] as u32;
     }
     // Add carried bits
     while (sum >> 16) > 0 {
@@ -198,6 +214,7 @@ fn compute_ip_checksum(header: &[u8]) -> u16 {
 }
 
 /// Creates an IPv4 packet with the given parameters
+#[allow(dead_code)]
 fn create_ip_packet(
     total_length: u16,
     source_ip: &Ipv4Addr,
@@ -265,6 +282,7 @@ fn help(program_name: &str) {
 }
 
 // Construct the complete TCP/IP packet
+#[allow(dead_code)]
 fn construct_tcp_ip_packet(
     tcp_header: &TcpHeader,
     source_ip: &Ipv4Addr,
@@ -293,6 +311,7 @@ fn construct_tcp_ip_packet(
 }
 
 // Define our port states
+#[allow(dead_code)]
 #[derive(Debug)]
 enum PortState {
     Open,
@@ -367,95 +386,201 @@ fn main() -> std::io::Result<()> {
     tcp_syn_scan(&source_ip, &dest_ip, destination_port)?;
     println!("Scan complete");
 
-
     Ok(())
 }
 
-fn tcp_syn_scan(source_ip: &Ipv4Addr, dest_ip: &Ipv4Addr, destination_port: u16) -> std::io::Result<PortState> {
+fn tcp_syn_scan(
+    source_ip: &Ipv4Addr,
+    dest_ip: &Ipv4Addr,
+    destination_port: u16,
+) -> std::io::Result<PortState> {
     println!("🚀 Starting TCP SYN Scanner");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("Target: {}:{}", dest_ip, destination_port);
 
     // 1. Create a raw socket
     println!("\n📡 Creating raw socket...");
-    let raw_socket = Socket::new(Domain::IPV4, Type::RAW, Some(Protocol::TCP))?;
+    let _raw_socket = Socket::new(Domain::IPV4, Type::RAW, Some(Protocol::TCP))?;
 
-    println!("Socket address: {:?} should be all zero because we haven't bound it yet", raw_socket.local_addr().unwrap().as_socket_ipv4().unwrap().ip());
-    // 3. Create random port
-    let src_port = rand::thread_rng().gen_range(1024..65535);
-    
+    let lowest_listen_port = 1024;
+    let random_port = rand::thread_rng().gen_range(lowest_listen_port..u16::MAX);
+    let socket_addr_and_port = SocketAddr::new(IpAddr::V4(*source_ip), random_port);
+    println!("We will try to bind to port {:?}", random_port);
+    println!("Socket address and port: {:?}", socket_addr_and_port);
 
+    // Structure for Mac OS X is explained in the [kernel](https://github.com/apple/darwin-xnu/blob/2ff845c2e033bd0ff64b5b6aa6063a1f8f65aa32/bsd/netinet/in.h#L397)
 
-    // 2. Set IP_HDRINCL
-    let one: i32 = 1;
-    unsafe {
-        libc::setsockopt(
-            raw_socket.as_raw_fd(),
-            libc::IPPROTO_IP,
-            libc::IP_HDRINCL,
-            &one as *const i32 as *const libc::c_void,
-            std::mem::size_of_val(&one) as libc::socklen_t,
-        )
-    };
+    // let mut addr = sockaddr_in {
+    //     sin_len: std::mem::size_of::<sockaddr_in>() as u8,
+    //     sin_family: AF_INET as u8,
+    //     sin_port: random_port.to_be(),  // Port in network byte order
+    //     sin_addr: in_addr {
+    //         s_addr: source_ip.to_bits().to_be()
+    //     },
+    //     sin_zero: [0; 8]
+    // };
 
+    // let mut bind_result = unsafe {
+    //     let addr_ptr = &addr as *const _ as *const sockaddr;
+    //     libc::bind(raw_socket.as_raw_fd(), addr_ptr, std::mem::size_of_val(&addr) as libc::socklen_t)
+    // };
 
+    // if bind_result == -1 {
+    //     return Err(std::io::Error::last_os_error());
+    // }
 
-    // println!("We are going to try random port: {}", src_port);
-    // // 3. Bind to the assigned port
-    // let raw_addr = SocketAddr::new(IpAddr::V4(*source_ip), src_port);
-    // socket.bind(&raw_addr.into())?;
-    // println!(
-    //     "Raw socket bound successfully {}",
-    //     socket
-    //         .local_addr()
-    //         .unwrap()
-    //         .as_socket_ipv4()
-    //         .unwrap()
-    //         .port()
-    // );
-    // println!("address: {:?}", raw_addr);
+    // println!("We successfully bound");
 
-
-
-    // 0. Set socket options to use libc::IPPROTO_IP and libc::IP_HDRINCL
-
-    // 1. Create destination address
-    // 2. Create tcp syn package
-    // 3. Create IP package
-    // 4. Send IP package to receiving address over raw_socket
-    // 5. Start loop
-    // 6. In loop wait for response using poll(2)
-    // 7. If response is received, return port state
-    // 8. If no response is received, return port state
-
-
-
-
-
-    // let mut addr_storage: libc::sockaddr_storage = unsafe { mem::zeroed() };
-    // let mut len = mem::size_of_val(&addr_storage) as libc::socklen_t;
-    //  // The `getsockname(2)` system call will intiliase `storage` for
-    //  // us, setting `len` to the correct length.
-    // let res = unsafe {
-    //     libc::getsockname(
-    //         socket.as_raw_fd(),
-    //         (&mut addr_storage as *mut libc::sockaddr_storage).cast(),
-    //         &mut len,
+    // // 2. Set IP_HDRINCL
+    // let one: i32 = 1;
+    // unsafe {
+    //     libc::setsockopt(
+    //         raw_socket.as_raw_fd(),
+    //         libc::IPPROTO_IP,
+    //         libc::IP_HDRINCL,
+    //         &one as *const i32 as *const libc::c_void,
+    //         std::mem::size_of_val(&one) as libc::socklen_t,
     //     )
     // };
 
-    // if res == -1 {
-    //     return Err(io::Error::last_os_error());
+    // println!("We successfully set IP_HDRINCL");
+
+    // TODO: Set-up TCP header
+    // TODO: Set-up IP header
+    // TODO: Send IP packet
+    // TODO: Wait for response
+    // TODO: Return port state
+
+    // Set-up IP header
+    // let mut ip = Ipv4 {
+    //     version: 4,
+    //     header_length: 5,
+    //     dscp: 0,
+    //     ecn: 0,
+    //     // total_length: 20 + tcp_packet.len() as u16,
+    //     total_length: 20 as u16,
+    //     identification: 0,
+    //     flags: 0,
+    //     fragment_offset: 0,
+    //     ttl: 64,
+    //     next_level_protocol: IpNextHeaderProtocol(6),
+    //     checksum: 0,  // TODO: verify correctness
+    //     source: *source_ip,
+    //     destination: *dest_ip,
+    //     options: vec![],  // TODO: verify correctness
+    //     payload: vec![], // TODO: verify correctness (you probably need to add the TCP packet)
+    // };
+
+    // // We need to define our destination address
+    // let mut dest_addr = sockaddr_in {
+    //     sin_len: (std::mem::size_of_val(&addr) as libc::socklen_t).try_into().unwrap(),
+    //     sin_family: AF_INET as u8,
+    //     sin_port: destination_port.to_be(),
+    //     sin_addr: in_addr {
+    //         s_addr: dest_ip.to_bits().to_be()
+    //     },
+    //     sin_zero: [0; 8]
+    // };
+
+    // let send_result = unsafe {
+    //     let dest_addr_ptr = &dest_addr as *const _ as *const sockaddr;
+    //     // Let us convert ipv4 to const void*
+    //     let buffer = &ip as *const _ as *const libc::c_void;
+    //     libc::sendto(
+    //         raw_socket.as_raw_fd(),
+    //         buffer,
+    //         (std::mem::size_of_val(&ip) as libc::socklen_t).try_into().unwrap(),
+    //         0,
+    //         dest_addr_ptr,
+    //         std::mem::size_of_val(&dest_addr) as libc::socklen_t);
+    // };
+
+    // if send_result == -1 {
+    //     return Err(std::io::Error::last_os_error());
     // }
-    
-    // let address = unsafe { SockAddr::new(addr_storage, len) };
-    
 
-    // create_and_send_syn_packet(&raw_socket, src_port, dest_ip, destination_port)?;
+    // println!("We successfully sent the IP packet");
 
-    return Ok(PortState::Open);
+    // loop {
+    //     // Let us receive the response
+    //     let mut recv_buffer = [0u8; 65535];
+    //     let recv_result = unsafe {
+    //         let dest_addr_ptr = &dest_addr as *const _ as *const sockaddr;
+    //         libc::recvfrom(
+    //             raw_socket.as_raw_fd(),
+    //             recv_buffer.as_mut_ptr() as *mut libc::c_void,
+    //             (recv_buffer.len() as libc::socklen_t).try_into().unwrap(),
+    //             0,
+    //             dest_addr_ptr,
+    //             std::mem::size_of_val(&dest_addr) as libc::socklen_t
+    //         );
+    //     };
 
+    //     if recv_result == -1 {
+    //         return Err(std::io::Error::last_os_error());
+    //     }
+
+    //     // Next we need to convert our recv_buffer to an ip packet
+    //     let ip_packet = unsafe {
+    //         std::slice::from_raw_parts(recv_buffer.as_ptr() as *const Ipv4, (recv_buffer.len() as libc::socklen_t).try_into().unwrap())
+    //     };
+
+    //     // Let's grab our tcp header
+    //     let raw_tcp_package = ip_packet[0].payload;
+
+    // TODO:
+    // 1. convert the raw_tcp_package to a tcp package and back out the header
+    // 2. check if the tcp header has the SYN flag set
+    // 3. if it does, return PortState::Open
+    // 4. if it doesn't, return PortState::Closed
+    Ok(PortState::Open)
 }
+
+// println!("We are going to try random port: {}", src_port);
+// // 3. Bind to the assigned port
+// let raw_addr = SocketAddr::new(IpAddr::V4(*source_ip), src_port);
+// socket.bind(&raw_addr.into())?;
+// println!(
+//     "Raw socket bound successfully {}",
+//     socket
+//         .local_addr()
+//         .unwrap()
+//         .as_socket_ipv4()
+//         .unwrap()
+//         .port()
+// );
+// println!("address: {:?}", raw_addr);
+
+// 0. Set socket options to use libc::IPPROTO_IP and libc::IP_HDRINCL
+
+// 1. Create destination address
+// 2. Create tcp syn package
+// 3. Create IP package
+// 4. Send IP package to receiving address over raw_socket
+// 5. Start loop
+// 6. In loop wait for response using poll(2)
+// 7. If response is received, return port state
+// 8. If no response is received, return port state
+
+// let mut addr_storage: libc::sockaddr_storage = unsafe { mem::zeroed() };
+// let mut len = mem::size_of_val(&addr_storage) as libc::socklen_t;
+//  // The `getsockname(2)` system call will intiliase `storage` for
+//  // us, setting `len` to the correct length.
+// let res = unsafe {
+//     libc::getsockname(
+//         socket.as_raw_fd(),
+//         (&mut addr_storage as *mut libc::sockaddr_storage).cast(),
+//         &mut len,
+//     )
+// };
+
+// if res == -1 {
+//     return Err(io::Error::last_os_error());
+// }
+
+// let address = unsafe { SockAddr::new(addr_storage, len) };
+
+// create_and_send_syn_packet(&raw_socket, src_port, dest_ip, destination_port)?;
 
 // fn create_and_send_syn_packet(raw_socket: &Socket, source_port: u16, dest_ip: &Ipv4Addr, dest_port: u16) -> std::io::Result<()> {
 //    // 3. Create the SYN packet
