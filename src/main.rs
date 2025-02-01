@@ -400,15 +400,38 @@ fn tcp_syn_scan(
 
     // 1. Create a raw socket
     println!("\n📡 Creating raw socket...");
-    let _raw_socket = Socket::new(Domain::IPV4, Type::RAW, Some(Protocol::TCP))?;
+    let raw_socket = Socket::new(Domain::IPV4, Type::RAW, Some(Protocol::TCP))?;
 
     let lowest_listen_port = 1024;
     let random_port = rand::thread_rng().gen_range(lowest_listen_port..u16::MAX);
-    let socket_addr_and_port = SocketAddr::new(IpAddr::V4(*source_ip), random_port);
+    let raw_socket_address = SocketAddr::new(IpAddr::V4(*source_ip), random_port);
     println!("We will try to bind to port {:?}", random_port);
-    println!("Socket address and port: {:?}", socket_addr_and_port);
+    println!("Socket address and port: {:?}", raw_socket_address);
+
+    // // Initialise a `SocketAddr` byte calling `getsockname(2)`.
+    // let mut addr_storage: libc::sockaddr_storage = unsafe { mem::zeroed() };
+    // let mut len = mem::size_of_val(&addr_storage) as libc::socklen_t;
+
+    // // The `getsockname(2)` system call will intiliase `storage` for
+    // // us, setting `len` to the correct length.
+    // let res = unsafe {
+    //     libc::getsockname(
+    //         raw_socket.as_raw_fd(),
+    //         (&mut addr_storage as *mut libc::sockaddr_storage).cast(),
+    //         &mut len,
+    //     )
+    // };
+    // if res == -1 {
+    //     return Err(io::Error::last_os_error());
+    // }
+
+    // let address = unsafe { SockAddr::new(addr_storage, len) };
+    let raw_socket_address = raw_socket_address.into();
+
+    raw_socket.bind(&raw_socket_address)?;
 
     // Structure for Mac OS X is explained in the [kernel](https://github.com/apple/darwin-xnu/blob/2ff845c2e033bd0ff64b5b6aa6063a1f8f65aa32/bsd/netinet/in.h#L397)
+    // Let's set-up an address for bind.
 
     // let mut addr = sockaddr_in {
     //     sin_len: std::mem::size_of::<sockaddr_in>() as u8,
@@ -533,6 +556,9 @@ fn tcp_syn_scan(
     // 2. check if the tcp header has the SYN flag set
     // 3. if it does, return PortState::Open
     // 4. if it doesn't, return PortState::Closed
+
+    // Clean up memory
+
     Ok(PortState::Open)
 }
 
