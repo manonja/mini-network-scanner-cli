@@ -9,7 +9,6 @@ use std::net::{IpAddr, Ipv4Addr};
 use types::{Ipv4Header, TcpHeader};
 
 #[allow(clippy::too_many_arguments)]
-#[allow(dead_code)]
 fn create_tcp_packet(
     source_port: u16,
     destination_port: u16,
@@ -54,7 +53,6 @@ fn create_tcp_packet(
 
 /// Creates a TCP SYN packet (used for initiating connections)
 /// SYN packets are special TCP packets with the SYN flag set to true
-#[allow(dead_code)]
 fn create_syn_packet(source_port: u16, destination_port: u16) -> TcpHeader {
     create_tcp_packet(
         source_port,
@@ -394,18 +392,19 @@ fn tcp_syn_scan(
         construct_ip_package_for_tcp_header(&mut syn_packet, source_ip, destination_ip);
     println!("Let's send our package");
     println!("Length of our ip_package {}", ip_syn_package.len());
-    let mut buffer: [u8; 44] = [0; 44];
+    // let mut buffer: [u8; 44] = [0; 44];
     // Ugly copy of our vec into ip package
-    for (vec_ip_package_iter, buf_iter) in ip_syn_package.iter().zip(buffer.iter_mut()) {
-        *buf_iter = *vec_ip_package_iter;
-    }
+    // for (vec_ip_package_iter, buf_iter) in ip_syn_package.iter().zip(buffer.iter_mut()) {
+    //     *buf_iter = *vec_ip_package_iter;
+    // }
+    let send_buffer = ip_syn_package.as_slice();
 
     // Let's dump the buffer to hex.
     for word in ip_syn_package.chunks(2).collect::<Vec<_>>() {
         println!("{:02x}{:02x}", word[0], word[1]);
     }
 
-    let send_result = raw_socket.send(&buffer);
+    let send_result = raw_socket.send(send_buffer);
 
     match send_result {
         Ok(_) => println!("Successfully sent"),
