@@ -1,5 +1,3 @@
-use pnet_packet::ip::IpNextHeaderProtocol;
-use pnet_packet::util::ipv4_checksum;
 use socket2::Protocol;
 use socket2::{Domain, Socket, Type};
 use std::env;
@@ -80,55 +78,61 @@ fn create_syn_packet(source_port: u16, destination_port: u16) -> TcpHeader {
     )
 }
 
-#[allow(dead_code)]
-fn pack_tcp_header(header: &TcpHeader) -> Vec<u8> {
-    // The TCP header length is 20 bytes, plus 4 bytes for each option
-    let header_length_in_32_bit_words = 5 + header.options.capacity();
-    let mut packed_header = Vec::with_capacity(header_length_in_32_bit_words * 4);
+impl TcpHeader {
+    fn pack(self: &mut TcpHeader) -> Vec<u8> {
+        // The TCP self length is 20 bytes, plus 4 bytes for each option
+        let self_length_in_32_bit_words = 5 + self.options.capacity();
+        let mut buffer = Vec::with_capacity(self_length_in_32_bit_words * 4);
 
-    // TODO: replace all `extend_from_slide` to `push`
-    packed_header.extend_from_slice(&header.source_port.to_be_bytes());
-    packed_header.extend_from_slice(&header.destination_port.to_be_bytes());
-    packed_header.extend_from_slice(&header.sequence_number.to_be_bytes());
-    packed_header.extend_from_slice(&header.ack_number.to_be_bytes());
+        // TODO: replace all `extend_from_slide` to `push`
+        buffer.extend_from_slice(&self.source_port.to_be_bytes());
+        buffer.extend_from_slice(&self.destination_port.to_be_bytes());
+        buffer.extend_from_slice(&self.sequence_number.to_be_bytes());
+        buffer.extend_from_slice(&self.ack_number.to_be_bytes());
 
-    // let offset_and_reserved: u8 = (header_length << 4);
-    let offset_and_reserved: u8 = (header_length_in_32_bit_words << 4) as u8;
-    packed_header.push(offset_and_reserved);
+        // let offset_and_reserved: u8 = (self_length << 4);
+        let offset_and_reserved: u8 = (self_length_in_32_bit_words << 4) as u8;
+        buffer.push(offset_and_reserved);
 
-    // Pack the flags into a single byte
-    let flags: u8 = ((header.flags_cwr as u8) << 7)
-        | ((header.flags_ece as u8) << 6)
-        | ((header.flags_urg as u8) << 5)
-        | ((header.flags_ack as u8) << 4)
-        | ((header.flags_psh as u8) << 3)
-        | ((header.flags_rst as u8) << 2)
-        | ((header.flags_syn as u8) << 1)
-        | (header.flags_fin as u8);
+        // Pack the flags into a single byte
+        let flags: u8 = ((self.flags_cwr as u8) << 7)
+            | ((self.flags_ece as u8) << 6)
+            | ((self.flags_urg as u8) << 5)
+            | ((self.flags_ack as u8) << 4)
+            | ((self.flags_psh as u8) << 3)
+            | ((self.flags_rst as u8) << 2)
+            | ((self.flags_syn as u8) << 1)
+            | (self.flags_fin as u8);
 
-    packed_header.push(flags);
+        buffer.push(flags);
 
-    packed_header.extend_from_slice(&header.window.to_be_bytes());
-    // Next process the checksum
-    packed_header.extend_from_slice(&header.checksum.to_be_bytes());
-    // Next process the urgent pointer
-    packed_header.extend_from_slice(&header.urgent_pointer.to_be_bytes());
+        buffer.extend_from_slice(&self.window.to_be_bytes());
+        // Next process the checksum
+        buffer.extend_from_slice(&self.checksum.to_be_bytes());
+        // Next process the urgent pointer
+        buffer.extend_from_slice(&self.urgent_pointer.to_be_bytes());
 
-    // Pack options using flat_map for efficient byte conversion
-    packed_header.extend_from_slice(
-        &header
-            .options
-            .iter()
-            .flat_map(|o| o.to_be_bytes())
-            .collect::<Vec<u8>>(),
-    );
+        // Pack options using flat_map for efficient byte conversion
+        buffer.extend_from_slice(
+            &self
+                .options
+                .iter()
+                .flat_map(|o| o.to_be_bytes())
+                .collect::<Vec<u8>>(),
+        );
 
-    packed_header
+        if self.checksum == 0 {
+            self.checksum = u16::from_be_bytes(rfc1071_checksum(&buffer));
+            return self.pack();
+        }
+
+        buffer
+    }
 }
 
 // TODO: Current implementation is O(2N), according to RFC this can be reduced to O(N)
 // where N is the size of the buffer.
-fn rfc1071_checksum(buffer: Vec<u8>) -> [u8; 2] {
+fn rfc1071_checksum(buffer: &[u8]) -> [u8; 2] {
     let bytes_be = buffer.iter().map(|&a| a.to_be()).collect::<Vec<_>>();
     let bytes_be_chunked: Vec<Vec<u8>> = bytes_be.chunks(2).map(|c| c.to_vec()).collect();
     let words16 = bytes_be_chunked
@@ -143,86 +147,36 @@ fn rfc1071_checksum(buffer: Vec<u8>) -> [u8; 2] {
 }
 
 impl Ipv4Header {
-    fn pack_ip_header(self: &mut Ipv4Header) -> Vec<u8> {
-        let mut packed_header = Vec::with_capacity(20);
+    fn pack(self: &mut Ipv4Header) -> Vec<u8> {
+        let mut buffer = Vec::with_capacity(20);
 
         let v_ihl = (self.version.to_be_bytes()[0] << 4) | (self.ihl.to_be_bytes()[0]);
-        packed_header.push(v_ihl);
-        packed_header.extend_from_slice(&self.tos.to_be_bytes());
-        packed_header.extend_from_slice(&self.total_length.to_be_bytes());
-        packed_header.extend_from_slice(&self.identification.to_be_bytes());
+        buffer.push(v_ihl);
+        buffer.extend_from_slice(&self.tos.to_be_bytes());
+        buffer.extend_from_slice(&self.total_length.to_be_bytes());
+        buffer.extend_from_slice(&self.identification.to_be_bytes());
 
         let fog_bytes = self.frag_offset.to_be_bytes();
         let flags_fog_byte0 = (self.flags.to_be_bytes()[0] << 6) | fog_bytes[0];
-        packed_header.push(flags_fog_byte0);
+        buffer.push(flags_fog_byte0);
         // We need to add the remaining byte that represents the 2 bits for
         // flags and 14 for fragment offset.
-        packed_header.push(fog_bytes[1]);
-        packed_header.extend_from_slice(&self.ttl.to_be_bytes());
-        packed_header.extend_from_slice(&self.proto.to_be_bytes());
-        packed_header.extend_from_slice(&self.checksum.to_be_bytes());
-        packed_header.extend_from_slice(&self.source_address.to_be_bytes());
-        packed_header.extend_from_slice(&self.destination_address.to_be_bytes());
+        buffer.push(fog_bytes[1]);
+        buffer.extend_from_slice(&self.ttl.to_be_bytes());
+        buffer.extend_from_slice(&self.proto.to_be_bytes());
+        buffer.extend_from_slice(&self.checksum.to_be_bytes());
+        buffer.extend_from_slice(&self.source_address.to_be_bytes());
+        buffer.extend_from_slice(&self.destination_address.to_be_bytes());
 
         if self.checksum == 0 {
-            // We could also pop 10 u8 from packed_header and set checksum and the rest for
+            // We could also pop 10 u8 from buffer and set checksum and the rest for
             // a small performance gain.
-            self.checksum = u16::from_be_bytes(rfc1071_checksum(packed_header));
-            return self.pack_ip_header();
+            self.checksum = u16::from_be_bytes(rfc1071_checksum(&buffer));
+            return self.pack();
         }
 
-        packed_header
+        buffer
     }
-}
-/// Computes the TCP checksum according to RFC 793.
-/// The checksum is calculated over:
-/// 1. TCP pseudo-header (containing IP information)
-/// 2. TCP header (with checksum field set to 0)
-/// 3. TCP data (if any)
-#[allow(dead_code)]
-fn compute_tcp_checksum(header: &TcpHeader, source_ip: &Ipv4Addr, dest_ip: &Ipv4Addr) -> u16 {
-    // Create a copy of the header and set its checksum to 0
-    // This is required because the checksum field must be 0 during calculation
-    let mut header_copy = header.clone();
-    header_copy.checksum = 0;
-    let packed_header = pack_tcp_header(&header_copy);
-
-    // skipword is the offset (in 16-bit words) to the checksum field in the TCP header
-    // Since checksum is at byte offset 16, and we're counting 16-bit words, we divide by 2
-    // So skipword = 16 / 2 = 8
-    let skipword = 8; // Skip the 16-bit checksum field (at offset 16 bytes)
-
-    // Create TCP pseudo-header required by RFC 793 for checksum calculation
-    // The pseudo-header ensures that TCP segments are delivered to the correct destination
-    // Format:
-    // - source_ip (4 bytes)
-    // - dest_ip (4 bytes)
-    // - zeros (1 byte)
-    // - protocol (1 byte, 6 for TCP)
-    // - tcp_length (2 bytes)
-    let tcp_length = packed_header.len() as u16;
-    let mut pseudo_header = Vec::with_capacity(12);
-    pseudo_header.extend_from_slice(&source_ip.octets()); // 4 bytes: Source IP
-    pseudo_header.extend_from_slice(&dest_ip.octets()); // 4 bytes: Destination IP
-    pseudo_header.push(0); // 1 byte: Reserved (must be zero)
-    pseudo_header.push(6); // 1 byte: Protocol (6 for TCP)
-    pseudo_header.extend_from_slice(&tcp_length.to_be_bytes()); // 2 bytes: TCP length (header + data)
-
-    // Calculate the checksum using the pnet_packet function
-    // Parameters:
-    // - packed_header: The TCP header bytes
-    // - skipword: Where to skip the checksum field
-    // - pseudo_header: The TCP pseudo-header
-    // - source_ip/dest_ip: IP addresses for additional verification
-    // - IpNextHeaderProtocol(6): Indicates this is TCP
-    ipv4_checksum(
-        &packed_header,
-        skipword,
-        &pseudo_header,
-        source_ip,
-        dest_ip,
-        IpNextHeaderProtocol(6), // TCP protocol number from IANA registry
-    )
 }
 
 /// Creates a test vector with specified capacity
@@ -256,7 +210,7 @@ fn create_ip_packet(
         destination_address: dest_ip.to_bits(),
     };
 
-    new_ip_packet.pack_ip_header()
+    new_ip_packet.pack()
 }
 
 // TODO: Implement a function that prints out the help message on the screen.
@@ -293,12 +247,12 @@ fn help(program_name: &str) {
 
 // Construct the complete TCP/IP packet
 fn construct_ip_package_for_tcp_header(
-    tcp_header: &TcpHeader,
+    tcp_header: &mut TcpHeader,
     source_ip: &Ipv4Addr,
     dest_ip: &Ipv4Addr,
 ) -> Vec<u8> {
     // First create the TCP header with checksum
-    let tcp_packet = pack_tcp_header(tcp_header);
+    let tcp_packet = tcp_header.pack();
 
     // Calculate total length (IP header + TCP header + options)
     let total_length = (20 + tcp_packet.len()) as u16;
@@ -435,10 +389,9 @@ fn tcp_syn_scan(
 
     // Next, let's create the TCP SYN package
     let mut syn_packet = create_syn_packet(source_port, destination_port);
-    syn_packet.checksum = compute_tcp_checksum(&syn_packet, source_ip, destination_ip);
     // Let's add the IP header
     let ip_syn_package =
-        construct_ip_package_for_tcp_header(&syn_packet, source_ip, destination_ip);
+        construct_ip_package_for_tcp_header(&mut syn_packet, source_ip, destination_ip);
     println!("Let's send our package");
     println!("Length of our ip_package {}", ip_syn_package.len());
     let mut buffer: [u8; 44] = [0; 44];
