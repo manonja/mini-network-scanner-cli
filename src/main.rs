@@ -1,28 +1,13 @@
 use pnet_packet::ip::IpNextHeaderProtocol;
 use pnet_packet::util::ipv4_checksum;
 use socket2::Protocol;
-#[allow(unused_imports)]
-use socket2::{Domain, SockAddr, Socket, Type};
+use socket2::{Domain, Socket, Type};
 use std::env;
-#[allow(unused_imports)]
-use std::mem::zeroed;
-#[allow(unused_imports)]
-use std::os::raw::*;
 
 use std::net::SocketAddr;
 mod types;
-#[allow(unused_imports)]
-use libc::{in_addr, sendto, sockaddr, sockaddr_in, AF_INET, INADDR_ANY};
-#[allow(unused_imports)]
-use pnet_packet::ipv4::Ipv4;
 use rand::Rng;
-#[allow(unused_imports)]
-use std::io;
-#[allow(unused_imports)]
-use std::mem;
 use std::net::{IpAddr, Ipv4Addr};
-#[allow(unused_imports)]
-use std::os::unix::io::AsRawFd;
 use types::TcpHeader;
 
 #[allow(clippy::too_many_arguments)]
@@ -407,12 +392,24 @@ fn tcp_syn_scan(
     let lowest_listen_port = 1024;
     let source_port = rand::thread_rng().gen_range(lowest_listen_port..u16::MAX);
     let raw_socket_address = SocketAddr::new(IpAddr::V4(*source_ip), source_port);
+    let socket_at_destination = SocketAddr::new(IpAddr::V4(*destination_ip), destination_port);
     println!("We will try to bind to port {:?}", source_port);
     println!("Socket address and port: {:?}", raw_socket_address);
 
-    let raw_socket_address = raw_socket_address.into();
+    // let raw_socket_address = raw_socket_address.into();
+    let socket_at_destination = socket_at_destination.into();
 
-    raw_socket.bind(&raw_socket_address)?;
+    // raw_socket.bind(&raw_socket_address)?;
+    raw_socket.connect(&socket_at_destination)?;
+    println!(
+        "We should be connected to {}:{}, let's check... ",
+        destination_ip, destination_port
+    );
+
+    match raw_socket.peer_addr() {
+        Ok(_) => println!("🚀"),
+        Err(error) => println!("😵 {}", error),
+    }
 
     // Next, let's create the TCP SYN package
     let mut syn_packet = create_syn_packet(source_port, destination_port);
@@ -428,7 +425,17 @@ fn tcp_syn_scan(
         *buf_iter = *vec_ip_package_iter;
     }
 
-    // raw_socket.send(&ip_syn_package.ar)
+    // Let's dump the buffer to hex.
+    for word in ip_syn_package.chunks(2).collect::<Vec<_>>() {
+        println!("{:02x}{:02x}", word[0], word[1]);
+    }
+
+    let send_result = raw_socket.send(&buffer);
+
+    match send_result {
+        Ok(_) => println!("Successfully sent"),
+        Err(error) => println!("OOps 💩: {}", error),
+    }
 
     // Structure for Mac OS X is explained in the [kernel](https://github.com/apple/darwin-xnu/blob/2ff845c2e033bd0ff64b5b6aa6063a1f8f65aa32/bsd/netinet/in.h#L397)
     // Let's set-up an address for bind.
