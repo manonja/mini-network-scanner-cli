@@ -5,6 +5,8 @@ use socket2::Protocol;
 use socket2::{Domain, SockAddr, Socket, Type};
 use std::env;
 #[allow(unused_imports)]
+use std::mem::zeroed;
+#[allow(unused_imports)]
 use std::os::raw::*;
 
 use std::net::SocketAddr;
@@ -283,7 +285,7 @@ fn help(program_name: &str) {
 
 // Construct the complete TCP/IP packet
 #[allow(dead_code)]
-fn construct_tcp_ip_packet(
+fn construct_ip_package_for_tcp_header(
     tcp_header: &TcpHeader,
     source_ip: &Ipv4Addr,
     dest_ip: &Ipv4Addr,
@@ -391,44 +393,42 @@ fn main() -> std::io::Result<()> {
 
 fn tcp_syn_scan(
     source_ip: &Ipv4Addr,
-    dest_ip: &Ipv4Addr,
+    destination_ip: &Ipv4Addr,
     destination_port: u16,
 ) -> std::io::Result<PortState> {
     println!("🚀 Starting TCP SYN Scanner");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("Target: {}:{}", dest_ip, destination_port);
+    println!("Target: {}:{}", destination_ip, destination_port);
 
     // 1. Create a raw socket
     println!("\n📡 Creating raw socket...");
     let raw_socket = Socket::new(Domain::IPV4, Type::RAW, Some(Protocol::TCP))?;
 
     let lowest_listen_port = 1024;
-    let random_port = rand::thread_rng().gen_range(lowest_listen_port..u16::MAX);
-    let raw_socket_address = SocketAddr::new(IpAddr::V4(*source_ip), random_port);
-    println!("We will try to bind to port {:?}", random_port);
+    let source_port = rand::thread_rng().gen_range(lowest_listen_port..u16::MAX);
+    let raw_socket_address = SocketAddr::new(IpAddr::V4(*source_ip), source_port);
+    println!("We will try to bind to port {:?}", source_port);
     println!("Socket address and port: {:?}", raw_socket_address);
 
-    // // Initialise a `SocketAddr` byte calling `getsockname(2)`.
-    // let mut addr_storage: libc::sockaddr_storage = unsafe { mem::zeroed() };
-    // let mut len = mem::size_of_val(&addr_storage) as libc::socklen_t;
-
-    // // The `getsockname(2)` system call will intiliase `storage` for
-    // // us, setting `len` to the correct length.
-    // let res = unsafe {
-    //     libc::getsockname(
-    //         raw_socket.as_raw_fd(),
-    //         (&mut addr_storage as *mut libc::sockaddr_storage).cast(),
-    //         &mut len,
-    //     )
-    // };
-    // if res == -1 {
-    //     return Err(io::Error::last_os_error());
-    // }
-
-    // let address = unsafe { SockAddr::new(addr_storage, len) };
     let raw_socket_address = raw_socket_address.into();
 
     raw_socket.bind(&raw_socket_address)?;
+
+    // Next, let's create the TCP SYN package
+    let mut syn_packet = create_syn_packet(source_port, destination_port);
+    syn_packet.checksum = compute_tcp_checksum(&syn_packet, source_ip, destination_ip);
+    // Let's add the IP header
+    let ip_syn_package =
+        construct_ip_package_for_tcp_header(&syn_packet, source_ip, destination_ip);
+    println!("Let's send our package");
+    println!("Length of our ip_package {}", ip_syn_package.len());
+    let mut buffer: [u8; 44] = [0; 44];
+    // Ugly copy of our vec into ip package
+    for (vec_ip_package_iter, buf_iter) in ip_syn_package.iter().zip(buffer.iter_mut()) {
+        *buf_iter = *vec_ip_package_iter;
+    }
+
+    // raw_socket.send(&ip_syn_package.ar)
 
     // Structure for Mac OS X is explained in the [kernel](https://github.com/apple/darwin-xnu/blob/2ff845c2e033bd0ff64b5b6aa6063a1f8f65aa32/bsd/netinet/in.h#L397)
     // Let's set-up an address for bind.
