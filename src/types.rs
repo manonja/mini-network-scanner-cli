@@ -32,3 +32,31 @@ pub struct TcpHeader {
     /// Options (variable)
     pub options: Vec<u32>,
 }
+
+pub struct Ipv4Header {
+    // version: 4 bits
+    pub version: u8,
+    // Internet header length: 4 bits
+    pub ihl: u8,
+    // Terms of service: 8 bits
+    pub tos: u8,
+    // Total length: 16 bits
+    pub total_length: u16,
+    // Identification: 16 bits
+    pub identification: u16,
+    // Flags: 2 bits
+    pub flags: u8,
+    // Fragment offset, 14 bits
+    pub frag_offset: u16,
+    // Time to live: 8 bits
+    pub ttl: u8,
+    // Protocol: 8 bits
+    pub proto: u8,
+    // Header checksum: 16 bits
+    pub checksum: u16,
+    // Source address
+    pub source_address: u32,
+    // Destination address
+    pub destination_address: u32, // Options
+                                  // Empty for now
+}

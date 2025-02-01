@@ -8,7 +8,7 @@ use std::net::SocketAddr;
 mod types;
 use rand::Rng;
 use std::net::{IpAddr, Ipv4Addr};
-use types::TcpHeader;
+use types::{Ipv4Header, TcpHeader};
 
 #[allow(clippy::too_many_arguments)]
 #[allow(dead_code)]
@@ -86,6 +86,7 @@ fn pack_tcp_header(header: &TcpHeader) -> Vec<u8> {
     let header_length_in_32_bit_words = 5 + header.options.capacity();
     let mut packed_header = Vec::with_capacity(header_length_in_32_bit_words * 4);
 
+    // TODO: replace all `extend_from_slide` to `push`
     packed_header.extend_from_slice(&header.source_port.to_be_bytes());
     packed_header.extend_from_slice(&header.destination_port.to_be_bytes());
     packed_header.extend_from_slice(&header.sequence_number.to_be_bytes());
@@ -125,6 +126,54 @@ fn pack_tcp_header(header: &TcpHeader) -> Vec<u8> {
     packed_header
 }
 
+// TODO: Current implementation is O(2N), according to RFC this can be reduced to O(N)
+// where N is the size of the buffer.
+fn rfc1071_checksum(buffer: Vec<u8>) -> [u8; 2] {
+    let bytes_be = buffer.iter().map(|&a| a.to_be()).collect::<Vec<_>>();
+    let bytes_be_chunked: Vec<Vec<u8>> = bytes_be.chunks(2).map(|c| c.to_vec()).collect();
+    let words16 = bytes_be_chunked
+        .into_iter()
+        .map(|db| (db[0] as u32) << 8 | (db[1] as u32));
+    let words_sum: u32 = words16.sum();
+    let carry: u16 = ((words_sum / 0xffff) % 10).try_into().unwrap();
+    let first_four_digits: u16 = (words_sum & 0xffff).try_into().unwrap();
+    let carry_addition: u16 = first_four_digits + carry;
+    let checksum = !carry_addition;
+    checksum.to_be_bytes()
+}
+
+impl Ipv4Header {
+    fn pack_ip_header(self: &mut Ipv4Header) -> Vec<u8> {
+        let mut packed_header = Vec::with_capacity(20);
+
+        let v_ihl = (self.version.to_be_bytes()[0] << 4) | (self.ihl.to_be_bytes()[0]);
+        packed_header.push(v_ihl);
+        packed_header.extend_from_slice(&self.tos.to_be_bytes());
+        packed_header.extend_from_slice(&self.total_length.to_be_bytes());
+        packed_header.extend_from_slice(&self.identification.to_be_bytes());
+
+        let fog_bytes = self.frag_offset.to_be_bytes();
+        let flags_fog_byte0 = (self.flags.to_be_bytes()[0] << 6) | fog_bytes[0];
+        packed_header.push(flags_fog_byte0);
+        // We need to add the remaining byte that represents the 2 bits for
+        // flags and 14 for fragment offset.
+        packed_header.push(fog_bytes[1]);
+        packed_header.extend_from_slice(&self.ttl.to_be_bytes());
+        packed_header.extend_from_slice(&self.proto.to_be_bytes());
+        packed_header.extend_from_slice(&self.checksum.to_be_bytes());
+        packed_header.extend_from_slice(&self.source_address.to_be_bytes());
+        packed_header.extend_from_slice(&self.destination_address.to_be_bytes());
+
+        if self.checksum == 0 {
+            // We could also pop 10 u8 from packed_header and set checksum and the rest for
+            // a small performance gain.
+            self.checksum = u16::from_be_bytes(rfc1071_checksum(packed_header));
+            return self.pack_ip_header();
+        }
+
+        packed_header
+    }
+}
 /// Computes the TCP checksum according to RFC 793.
 /// The checksum is calculated over:
 /// 1. TCP pseudo-header (containing IP information)
@@ -185,55 +234,29 @@ fn create_test_vector(size: usize) -> Vec<u32> {
     v
 }
 
-/// Computes the IPv4 header checksum
-#[allow(dead_code)]
-fn compute_ip_checksum(header: &[u8]) -> u16 {
-    let mut sum: u32 = 0;
-    // Process 2 bytes at a time
-    for i in (0..header.len()).step_by(2) {
-        sum += (header[i] as u32) << 8 | header[i + 1] as u32;
-    }
-    // Add carried bits
-    while (sum >> 16) > 0 {
-        sum = (sum & 0xFFFF) + (sum >> 16);
-    }
-    !sum as u16
-}
-
 /// Creates an IPv4 packet with the given parameters
-#[allow(dead_code)]
 fn create_ip_packet(
     total_length: u16,
     source_ip: &Ipv4Addr,
     dest_ip: &Ipv4Addr,
     protocol: u8,
 ) -> Vec<u8> {
-    let mut packet = Vec::with_capacity(20); // IPv4 header is 20 bytes
+    let mut new_ip_packet = Ipv4Header {
+        version: 4,
+        ihl: 5,
+        tos: 0,
+        total_length,
+        identification: 0,
+        flags: 0x2,
+        frag_offset: 0,
+        ttl: 255,
+        proto: protocol,
+        checksum: 0, // Let checksum be computed
+        source_address: source_ip.to_bits(),
+        destination_address: dest_ip.to_bits(),
+    };
 
-    // Version (4) and IHL (5 words = 20 bytes) combined: 0x45
-    packet.push(0x45);
-    // DSCP (0) and ECN (0)
-    packet.push(0x00);
-    // Total Length (16 bits)
-    packet.extend_from_slice(&total_length.to_be_bytes());
-    // Identification (16 bits)
-    packet.extend_from_slice(&[0x00, 0x00]);
-    // Flags (Don't Fragment) and Fragment Offset
-    packet.extend_from_slice(&[0x40, 0x00]);
-    // TTL (64) and Protocol
-    packet.extend_from_slice(&[64, protocol]);
-    // Header Checksum (will be filled later)
-    packet.extend_from_slice(&[0x00, 0x00]);
-
-    // Source and Destination IPs using flat_map
-    packet.extend([source_ip, dest_ip].iter().flat_map(|ip| ip.octets()));
-
-    // Compute and set IP header checksum
-    let checksum = compute_ip_checksum(&packet);
-    packet[10] = (checksum >> 8) as u8;
-    packet[11] = checksum as u8;
-
-    packet
+    new_ip_packet.pack_ip_header()
 }
 
 // TODO: Implement a function that prints out the help message on the screen.
@@ -269,7 +292,6 @@ fn help(program_name: &str) {
 }
 
 // Construct the complete TCP/IP packet
-#[allow(dead_code)]
 fn construct_ip_package_for_tcp_header(
     tcp_header: &TcpHeader,
     source_ip: &Ipv4Addr,
