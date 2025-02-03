@@ -1,6 +1,7 @@
 use socket2::Protocol;
 use socket2::{Domain, Socket, Type};
 use std::env;
+use std::io;
 
 use std::net::SocketAddr;
 mod types;
@@ -124,6 +125,8 @@ impl TcpHeader {
             return self.pack();
         }
 
+        println!("TCP pack created:{:02x?}", buffer);
+
         buffer
     }
 }
@@ -141,40 +144,30 @@ fn rfc1071_checksum(buffer: &[u8]) -> [u8; 2] {
     let first_four_digits: u16 = (words_sum & 0xffff).try_into().unwrap();
     let carry_addition: u16 = first_four_digits + carry;
     let checksum = !carry_addition;
+
+    println!("checksum for buffer computed: {:02x?}", checksum);
+
     checksum.to_be_bytes()
 }
 
-impl Ipv4Header {
-    fn pack(self: &mut Ipv4Header) -> Vec<u8> {
-        let mut buffer = Vec::with_capacity(20);
+fn test_wikipedia_example() {
+    // The Wikipedia example IP header (without the checksum field)
+    let ip_header: [u8; 18] = [
+        0x45, 0x00, 0x00, 0x73, 0x00, 0x00, 0x40, 0x00, 0x40, 0x11, 0xc0, 0xa8, 0x00, 0x01, 0xc0,
+        0xa8, 0x00, 0xc7,
+    ];
 
-        let v_ihl = (self.version.to_be_bytes()[0] << 4) | (self.ihl.to_be_bytes()[0]);
-        buffer.push(v_ihl);
-        buffer.extend_from_slice(&self.tos.to_be_bytes());
-        buffer.extend_from_slice(&self.total_length.to_be_bytes());
-        buffer.extend_from_slice(&self.identification.to_be_bytes());
+    let computed_checksum = rfc1071_checksum(&ip_header);
+    let expected_checksum: [u8; 2] = [0xb8, 0x61]; // "b861" in hex
 
-        let fog_bytes = self.frag_offset.to_be_bytes();
-        let flags_fog_byte0 = (self.flags.to_be_bytes()[0] << 6) | fog_bytes[0];
-        buffer.push(flags_fog_byte0);
-        // We need to add the remaining byte that represents the 2 bits for
-        // flags and 14 for fragment offset.
-        buffer.push(fog_bytes[1]);
-        buffer.extend_from_slice(&self.ttl.to_be_bytes());
-        buffer.extend_from_slice(&self.proto.to_be_bytes());
-        buffer.extend_from_slice(&self.checksum.to_be_bytes());
-        buffer.extend_from_slice(&self.source_address.to_be_bytes());
-        buffer.extend_from_slice(&self.destination_address.to_be_bytes());
-
-        if self.checksum == 0 {
-            // We could also pop 10 u8 from buffer and set checksum and the rest for
-            // a small performance gain.
-            self.checksum = u16::from_be_bytes(rfc1071_checksum(&buffer));
-            return self.pack();
-        }
-
-        buffer
-    }
+    assert_eq!(
+        computed_checksum, expected_checksum,
+        "Checksum did not match expected value!"
+    );
+    println!(
+        "Wikipedia example checksum results: {:04x?}, {:04x?}",
+        computed_checksum, expected_checksum
+    );
 }
 
 /// Creates a test vector with specified capacity
@@ -199,7 +192,7 @@ fn create_ip_packet(
         tos: 0,
         total_length,
         identification: 0,
-        flags: 0x2,
+        flags: 0b010, // Set only 3 bits flag
         frag_offset: 0,
         ttl: 255,
         proto: protocol,
@@ -209,6 +202,51 @@ fn create_ip_packet(
     };
 
     new_ip_packet.pack()
+}
+
+impl Ipv4Header {
+    fn pack(self: &mut Ipv4Header) -> Vec<u8> {
+        let mut buffer = Vec::with_capacity(20);
+
+        // 1. First byte: Version (4 bits) + IHL (4 bits)
+        let v_ihl = (self.version << 4) | (self.ihl & 0x0F);
+        buffer.push(v_ihl);
+        buffer.extend_from_slice(&self.tos.to_be_bytes());
+        buffer.extend_from_slice(&self.total_length.to_be_bytes());
+        buffer.extend_from_slice(&self.identification.to_be_bytes());
+
+        // let fog_bytes = self.frag_offset.to_be_bytes();
+        // let flags_fog_byte0 = (self.flags.to_be_bytes()[0] << 6) | fog_bytes[0];
+        // buffer.push(flags_fog_byte0);
+        // buffer.push(fog_bytes[1]);
+
+        // 2. Correctly encode Flags (3 bits) + Fragment Offset (13 bits)
+        let flags_fog_bytes = ((self.flags as u16) << 13) | (self.frag_offset & 0x1FFF);
+        buffer.extend_from_slice(&flags_fog_bytes.to_be_bytes());
+        // We need to add the remaining byte that represents the 2 bits for
+        // flags and 14 for fragment offset.
+        buffer.push(self.ttl);
+        buffer.push(self.proto);
+        buffer.extend_from_slice(&self.checksum.to_be_bytes());
+        buffer.extend_from_slice(&self.source_address.to_be_bytes());
+        buffer.extend_from_slice(&self.destination_address.to_be_bytes());
+
+        // 3. Compute checksum (if it's not already set)
+        if self.checksum == 0 {
+            // We could also pop 10 u8 from buffer and set checksum and the rest for
+            // a small performance gain.
+            self.checksum = u16::from_be_bytes(rfc1071_checksum(&buffer));
+            buffer[10..12].copy_from_slice(&self.checksum.to_be_bytes());
+            return self.pack();
+        }
+
+        println!(
+            "IP pack created: {:02x?} with checksum: 0x{:04x}",
+            buffer, self.checksum
+        );
+
+        buffer
+    }
 }
 
 // TODO: Implement a function that prints out the help message on the screen.
@@ -265,6 +303,12 @@ fn construct_ip_package_for_tcp_header(
         6, // TCP protocol number
     );
 
+    println!("*******IP Packet:********* {:02x?}", packet);
+
+    //     println!("Total size: {} bytes", complete_packet.len());
+    //     println!("First 20 bytes (IP header): {:02x?}", &complete_packet[..20]);
+    //     println!("Next 20 bytes (TCP header): {:02x?}", &complete_packet[20..40]);
+
     // Add TCP header and data
     packet.extend_from_slice(&tcp_packet);
 
@@ -281,6 +325,13 @@ enum PortState {
 }
 
 fn main() -> std::io::Result<()> {
+    let mut input = String::new();
+
+    println!("We are giving you a chance to attach lldb. 🐞");
+    io::stdin()
+        .read_line(&mut input)
+        .expect("Failed to read line");
+
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
@@ -344,6 +395,7 @@ fn main() -> std::io::Result<()> {
     println!("Requested Port: {}", destination_port);
     println!("Requested Source IP: {}", source_ip);
 
+    test_wikipedia_example();
     tcp_syn_scan(&source_ip, &dest_ip, destination_port)?;
     println!("Scan complete");
 
@@ -400,9 +452,9 @@ fn tcp_syn_scan(
     let send_buffer = ip_syn_package.as_slice();
 
     // Let's dump the buffer to hex.
-    for word in ip_syn_package.chunks(2).collect::<Vec<_>>() {
-        println!("{:02x}{:02x}", word[0], word[1]);
-    }
+    // for word in ip_syn_package.chunks(2).collect::<Vec<_>>() {
+    //     println!("{:02x}{:02x}", word[0], word[1]);
+    // }
 
     let send_result = raw_socket.send(send_buffer);
 
