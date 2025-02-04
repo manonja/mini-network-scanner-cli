@@ -3,6 +3,12 @@ use socket2::{Domain, Socket, Type};
 use std::env;
 use std::io;
 
+use std::time::Duration;
+
+use std::fs::File;
+use std::io::Write;
+
+use std::mem::MaybeUninit;
 use std::net::SocketAddr;
 mod types;
 use rand::Rng;
@@ -83,6 +89,14 @@ impl TcpHeader {
         let self_length_in_32_bit_words = 5 + self.options.capacity();
         let mut buffer = Vec::with_capacity(self_length_in_32_bit_words * 4);
 
+        println!("source port in buffer {}", self.source_port);
+        println!("self {:?}", self);
+        println!(
+            "options lenght and capacity{:?}, {:?}",
+            self.options.len(),
+            self.options.capacity()
+        );
+
         // TODO: replace all `extend_from_slide` to `push`
         buffer.extend_from_slice(&self.source_port.to_be_bytes());
         buffer.extend_from_slice(&self.destination_port.to_be_bytes());
@@ -90,8 +104,29 @@ impl TcpHeader {
         buffer.extend_from_slice(&self.ack_number.to_be_bytes());
 
         // let offset_and_reserved: u8 = (self_length << 4);
-        let offset_and_reserved: u8 = (self_length_in_32_bit_words << 4) as u8;
+        let offset_and_reserved: u8 = (self_length_in_32_bit_words as u8) << 4;
         buffer.push(offset_and_reserved);
+        // TODO: remove debug code
+        println!(
+            "Header length                     {}",
+            self_length_in_32_bit_words
+        );
+        println!(
+            "Header length                     {:08b}",
+            self_length_in_32_bit_words
+        );
+        println!(
+            "Header length in BE               {:08b}",
+            self_length_in_32_bit_words.to_be()
+        );
+        println!(
+            "Header length in BE shifted by 4  {:08b}",
+            self_length_in_32_bit_words.to_be() >> 4
+        );
+        println!(
+            "Offet and reserved                {:08b}",
+            offset_and_reserved
+        );
 
         // Pack the flags into a single byte
         let flags: u8 = ((self.flags_cwr as u8) << 7)
@@ -124,9 +159,6 @@ impl TcpHeader {
             self.checksum = u16::from_be_bytes(rfc1071_checksum(&buffer));
             return self.pack();
         }
-
-        println!("TCP pack created:{:02x?}", buffer);
-
         buffer
     }
 }
@@ -149,36 +181,6 @@ fn rfc1071_checksum(buffer: &[u8]) -> [u8; 2] {
 
     checksum.to_be_bytes()
 }
-
-fn test_wikipedia_example() {
-    // The Wikipedia example IP header (without the checksum field)
-    let ip_header: [u8; 18] = [
-        0x45, 0x00, 0x00, 0x73, 0x00, 0x00, 0x40, 0x00, 0x40, 0x11, 0xc0, 0xa8, 0x00, 0x01, 0xc0,
-        0xa8, 0x00, 0xc7,
-    ];
-
-    let computed_checksum = rfc1071_checksum(&ip_header);
-    let expected_checksum: [u8; 2] = [0xb8, 0x61]; // "b861" in hex
-
-    assert_eq!(
-        computed_checksum, expected_checksum,
-        "Checksum did not match expected value!"
-    );
-    println!(
-        "Wikipedia example checksum results: {:04x?}, {:04x?}",
-        computed_checksum, expected_checksum
-    );
-}
-
-/// Creates a test vector with specified capacity
-#[allow(dead_code)]
-fn create_test_vector(size: usize) -> Vec<u32> {
-    let mut v: Vec<u32> = Vec::new();
-    v.reserve_exact(size);
-    assert_eq!(size, v.capacity());
-    v
-}
-
 /// Creates an IPv4 packet with the given parameters
 fn create_ip_packet(
     total_length: u16,
@@ -200,6 +202,9 @@ fn create_ip_packet(
         source_address: source_ip.to_bits(),
         destination_address: dest_ip.to_bits(),
     };
+
+    println!("source address: {}", source_ip);
+    println!("destination address: {}", dest_ip);
 
     new_ip_packet.pack()
 }
@@ -249,6 +254,21 @@ impl Ipv4Header {
     }
 }
 
+#[allow(dead_code)]
+fn dump_hex_file(buffer: Vec<u8>) -> io::Result<()> {
+    // Example buffer with some binary data
+    // let buffer: Vec<u8> = vec![0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe];
+
+    // Create (or overwrite) a file named "dump.bin"
+    let mut file = File::create("dump.bin")?;
+
+    // Write the entire buffer to the file
+    file.write_all(&buffer)?;
+
+    println!("Buffer dumped to dump.bin");
+    Ok(())
+}
+
 // TODO: Implement a function that prints out the help message on the screen.
 fn help(program_name: &str) {
     let help_message = format!("
@@ -290,6 +310,8 @@ fn construct_ip_package_for_tcp_header(
     // First create the TCP header with checksum
     let tcp_packet = tcp_header.pack();
 
+    println!("TCP_PACKET XIN CONSTRUCT IP PACKAGE 0x{:04x?}", tcp_packet);
+
     // Calculate total length (IP header + TCP header + options)
     let total_length = (20 + tcp_packet.len()) as u16;
     println!("TCP packet length: {}", tcp_packet.len());
@@ -325,13 +347,6 @@ enum PortState {
 }
 
 fn main() -> std::io::Result<()> {
-    let mut input = String::new();
-
-    println!("We are giving you a chance to attach lldb. 🐞");
-    io::stdin()
-        .read_line(&mut input)
-        .expect("Failed to read line");
-
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
@@ -395,7 +410,8 @@ fn main() -> std::io::Result<()> {
     println!("Requested Port: {}", destination_port);
     println!("Requested Source IP: {}", source_ip);
 
-    test_wikipedia_example();
+    test_checksum_with_wikipedia_example();
+    test_tcp_header_pack();
     tcp_syn_scan(&source_ip, &dest_ip, destination_port)?;
     println!("Scan complete");
 
@@ -437,6 +453,11 @@ fn tcp_syn_scan(
         Err(error) => println!("😵 {}", error),
     }
 
+    println!(
+        "SOURCE PORT AND DEST PORT {}, {}",
+        source_port, destination_port
+    );
+
     // Next, let's create the TCP SYN package
     let mut syn_packet = create_syn_packet(source_port, destination_port);
     // Let's add the IP header
@@ -444,17 +465,8 @@ fn tcp_syn_scan(
         construct_ip_package_for_tcp_header(&mut syn_packet, source_ip, destination_ip);
     println!("Let's send our package");
     println!("Length of our ip_package {}", ip_syn_package.len());
-    // let mut buffer: [u8; 44] = [0; 44];
-    // Ugly copy of our vec into ip package
-    // for (vec_ip_package_iter, buf_iter) in ip_syn_package.iter().zip(buffer.iter_mut()) {
-    //     *buf_iter = *vec_ip_package_iter;
-    // }
-    let send_buffer = ip_syn_package.as_slice();
 
-    // Let's dump the buffer to hex.
-    // for word in ip_syn_package.chunks(2).collect::<Vec<_>>() {
-    //     println!("{:02x}{:02x}", word[0], word[1]);
-    // }
+    let send_buffer = ip_syn_package.as_slice();
 
     let send_result = raw_socket.send(send_buffer);
 
@@ -463,8 +475,82 @@ fn tcp_syn_scan(
         Err(error) => println!("OOps 💩: {}", error),
     }
 
-    // Structure for Mac OS X is explained in the [kernel](https://github.com/apple/darwin-xnu/blob/2ff845c2e033bd0ff64b5b6aa6063a1f8f65aa32/bsd/netinet/in.h#L397)
-    // Let's set-up an address for bind.
+    // Create a loop to wait until we receive a response
+    // If we receive SYN+ACK in the buffer, then the connection is open.
+
+    // 3. Set a read timeout so we don't block forever.
+    raw_socket.set_read_timeout(Some(Duration::from_secs(3)))?;
+
+    // 4. Receive a response.
+    // We'll allocate a buffer for receiving data.
+    const BUFFER_SIZE: usize = 1500;
+    loop {
+        // Create a buffer of unitialised bytes
+        let mut recv_buffer: Vec<MaybeUninit<u8>> = vec![MaybeUninit::uninit(); BUFFER_SIZE];
+
+        // Call recv() on our raw socket
+        match raw_socket.recv(&mut recv_buffer[..]) {
+            Ok(received) => {
+                if received == 0 {
+                    continue; //nothing received, try again
+                }
+                let buf: &[u8] = unsafe {
+                    std::slice::from_raw_parts(recv_buffer.as_ptr() as *const u8, received)
+                };
+                println!("Received {} bytes: {:02x?}", received, buf);
+
+                // 5. Parse the IP header to determine where the TCP header starts
+                if received < 20 {
+                    // not a full IP header, continue parsing
+                    continue;
+                }
+
+                let ip_header_len = (buf[0] & 0x0f) * 4; // IP header length in bytes
+                if received < (ip_header_len as usize + 20) {
+                    // Not enough bytes for a TCP header; continue waiting.
+                    continue;
+                }
+
+                // The TCP header starts immediately after the IP header
+                let tcp_header = &buf[ip_header_len as usize..];
+                // Considering the TCP layout:
+                // Bytes 0-1: source port, 2-3: dest port, 4-7: sequence number,
+                // 8-11: ack number, 12: data offset/reserved, 13: flags, etc.
+                let tcp_flags = tcp_header[13];
+                println!("TCP flags: 0x{:02x}", tcp_flags);
+
+                // 6. Interprect the flags
+                // If we receive a SYN+ACK (SYN = 0x02 and ACK = 0x10), the port is open
+                if tcp_flags & 0x12 == 0x12 {
+                    println!("Port {} is OPEN (SYN+ACK received).", destination_port);
+                    return Ok(PortState::Open);
+                }
+                // If we receive a RST (Reset flag 0x04) then the port is closed.
+                else if tcp_flags & 0x04 == 0x04 {
+                    println!("Port {} is CLOSED (RST received).", destination_port);
+                    return Ok(PortState::Closed);
+                }
+                // Otherwise, the response is not conclusive; break or return filtered.
+                else {
+                    println!(
+                        "Port {} response inconclusive; marking as filtered.",
+                        destination_port
+                    );
+                    return Ok(PortState::Filtered);
+                }
+            }
+            Err(e) => {
+                // If the error is a timeout (WouldBlock or TimedOut), assume no response.
+                println!("Receive error: {}", e);
+                return Ok(PortState::Filtered);
+            }
+        }
+
+        // Structure for Mac OS X is explained in the [kernel](https://github.com/apple/darwin-xnu/blob/2ff845c2e033bd0ff64b5b6aa6063a1f8f65aa32/bsd/netinet/in.h#L397)
+        // Let's set-up an address for bind.
+
+        // Ok(PortState::Open)
+    }
 
     // let mut addr = sockaddr_in {
     //     sin_len: std::mem::size_of::<sockaddr_in>() as u8,
@@ -499,64 +585,6 @@ fn tcp_syn_scan(
     //     )
     // };
 
-    // println!("We successfully set IP_HDRINCL");
-
-    // TODO: Set-up TCP header
-    // TODO: Set-up IP header
-    // TODO: Send IP packet
-    // TODO: Wait for response
-    // TODO: Return port state
-
-    // Set-up IP header
-    // let mut ip = Ipv4 {
-    //     version: 4,
-    //     header_length: 5,
-    //     dscp: 0,
-    //     ecn: 0,
-    //     // total_length: 20 + tcp_packet.len() as u16,
-    //     total_length: 20 as u16,
-    //     identification: 0,
-    //     flags: 0,
-    //     fragment_offset: 0,
-    //     ttl: 64,
-    //     next_level_protocol: IpNextHeaderProtocol(6),
-    //     checksum: 0,  // TODO: verify correctness
-    //     source: *source_ip,
-    //     destination: *dest_ip,
-    //     options: vec![],  // TODO: verify correctness
-    //     payload: vec![], // TODO: verify correctness (you probably need to add the TCP packet)
-    // };
-
-    // // We need to define our destination address
-    // let mut dest_addr = sockaddr_in {
-    //     sin_len: (std::mem::size_of_val(&addr) as libc::socklen_t).try_into().unwrap(),
-    //     sin_family: AF_INET as u8,
-    //     sin_port: destination_port.to_be(),
-    //     sin_addr: in_addr {
-    //         s_addr: dest_ip.to_bits().to_be()
-    //     },
-    //     sin_zero: [0; 8]
-    // };
-
-    // let send_result = unsafe {
-    //     let dest_addr_ptr = &dest_addr as *const _ as *const sockaddr;
-    //     // Let us convert ipv4 to const void*
-    //     let buffer = &ip as *const _ as *const libc::c_void;
-    //     libc::sendto(
-    //         raw_socket.as_raw_fd(),
-    //         buffer,
-    //         (std::mem::size_of_val(&ip) as libc::socklen_t).try_into().unwrap(),
-    //         0,
-    //         dest_addr_ptr,
-    //         std::mem::size_of_val(&dest_addr) as libc::socklen_t);
-    // };
-
-    // if send_result == -1 {
-    //     return Err(std::io::Error::last_os_error());
-    // }
-
-    // println!("We successfully sent the IP packet");
-
     // loop {
     //     // Let us receive the response
     //     let mut recv_buffer = [0u8; 65535];
@@ -584,142 +612,154 @@ fn tcp_syn_scan(
     //     // Let's grab our tcp header
     //     let raw_tcp_package = ip_packet[0].payload;
 
-    // TODO:
-    // 1. convert the raw_tcp_package to a tcp package and back out the header
-    // 2. check if the tcp header has the SYN flag set
-    // 3. if it does, return PortState::Open
-    // 4. if it doesn't, return PortState::Closed
+    // 5. Wait for response
+    //     let mut buf = [MaybeUninit::uninit(); 65535];
+    //     raw_socket.set_read_timeout(Some(Duration::from_millis(1500)))?;
 
-    // Clean up memory
+    //     // 6. Receive response and return the port state
+    //     match raw_socket.recv(&mut buf) {
+    //         Ok(n) if n >= 40 => {
+    //             println!("  Received {} bytes", n);
 
-    Ok(PortState::Open)
+    //             let received_data = &buf[..n];
+    //             let buf: Vec<u8> = received_data
+    //                 .iter()
+    //                 .map(|b| unsafe { b.assume_init() })
+    //                 .collect();
+
+    //             let ip_header_len = (buf[0] & 0x0f) * 4;
+    //             let tcp_flags = buf[(ip_header_len + 13) as usize];
+    //             println!("  TCP Flags received: 0x{:02x}", tcp_flags);
+
+    //             Ok(match tcp_flags {
+    //                 f if f & 0x12 == 0x12 => {
+    //                     println!("  🟢 Detected: SYN-ACK (Port Open)");
+    //                     PortState::Open;
+    //                 }
+    //                 f if f & 0x04 == 0x04 => {
+    //                     println!("  🔴 Detected: RST (Port Closed)");
+    //                     PortState::Closed;
+    //                 }
+    //                 _ => {
+    //                     println!("  🟡 Detected: Unknown response (Port Filtered)");
+    //                     PortState::Filtered;
+    //                 }
+    //             })
+    //         }
+    //         Ok(n) => {
+    //             println!("  Received packet too small: {} bytes", n);
+    //             Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Received packet too small"))
+    //         },
+    //         Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+    //             println!("  No response received (timeout)");
+    //             Err(std::io::Error::new(std::io::ErrorKind::WouldBlock, "No response received"))
+    //         },
+    //         Err(e) => {
+    //             println!("  ❌ Error receiving response: {}", e);
+    //             Err(e)
+    //         }
+
+    //
+    //
 }
 
-// println!("We are going to try random port: {}", src_port);
-// // 3. Bind to the assigned port
-// let raw_addr = SocketAddr::new(IpAddr::V4(*source_ip), src_port);
-// socket.bind(&raw_addr.into())?;
-// println!(
-//     "Raw socket bound successfully {}",
-//     socket
-//         .local_addr()
-//         .unwrap()
-//         .as_socket_ipv4()
-//         .unwrap()
-//         .port()
-// );
-// println!("address: {:?}", raw_addr);
+fn test_tcp_header_pack() {
+    // Expected TCP header (44 bytes):
+    // Breakdown:
+    //   [0-1]   Source Port:       0xeb1e        (60190)
+    //   [2-3]   Destination Port:  0x1f90        (8080)
+    //   [4-7]   Sequence Number:   0xe608ebd5
+    //   [8-11]  Ack Number:        0x00000000
+    //   [12]    Data Offset:       11 (0xb0 when shifted left by 4 bits)
+    //   [13]    Flags:             0x02         (only SYN set)
+    //   [14-15] Window:            0xffff       (65535)
+    //   [16-17] Checksum:          0xfe34
+    //   [18-19] Urgent Pointer:    0x0000
+    //   [20-43] Options (6 x 4 bytes):
+    //           0x02043fd8, 0x01030306, 0x0101080a, 0x3648aacd, 0x00000000, 0x04020000
+    let expected: Vec<u8> = vec![
+        0xeb, 0x1e, // Source Port (60190)
+        0x1f, 0x90, // Destination Port (8080)
+        0xe6, 0x08, 0xeb, 0xd5, // Sequence Number (0xe608ebd5)
+        0x00, 0x00, 0x00, 0x00, // Ack Number (0)
+        0xb0, // Data Offset: (11 << 4) = 0xb0 (44-byte header)
+        0x02, // Flags: 0x02 (SYN only)
+        0xff, 0xff, // Window (65535)
+        0xfe, 0x34, // Checksum (0xfe34)
+        0x00, 0x00, // Urgent Pointer (0)
+        // Options (24 bytes, 6 words)
+        0x02, 0x04, 0x3f, 0xd8, // Option 1: MSS option: 0x02043fd8
+        0x01, 0x03, 0x03, 0x06, // Option 2: (0x01030306)
+        0x01, 0x01, 0x08, 0x0a, // Option 3: (0x0101080a)
+        0x36, 0x48, 0xaa, 0xcd, // Option 4: (0x3648aacd)
+        0x00, 0x00, 0x00, 0x00, // Option 5: (0x00000000)
+        0x04, 0x02, 0x00, 0x00, // Option 6: (0x04020000)
+    ];
 
-// 0. Set socket options to use libc::IPPROTO_IP and libc::IP_HDRINCL
+    // Build the options vector.
+    // Make sure each u32 is given in hexadecimal exactly as expected.
+    let options = vec![
+        0x02043fd8, 0x01030306, 0x0101080a, 0x3648aacd, 0x00000000, 0x04020000,
+    ];
 
-// 1. Create destination address
-// 2. Create tcp syn package
-// 3. Create IP package
-// 4. Send IP package to receiving address over raw_socket
-// 5. Start loop
-// 6. In loop wait for response using poll(2)
-// 7. If response is received, return port state
-// 8. If no response is received, return port state
+    // Create the TCP header with the given values.
+    // Note: The data offset in the final header is computed as:
+    //       5 (base header words) + options.len() (6) = 11 words.
+    let mut tcp_header = create_tcp_packet(
+        60190,      // source_port
+        8080,       // destination_port
+        0xe608ebd5, // sequence_number (nonzero to match expected)
+        0,          // ack_number
+        0,          // header_length parameter (ignored in pack())
+        0,          // reserved
+        false,      // flags: CWR
+        false,      // flags: ECE
+        false,      // flags: URG
+        false,      // flags: ACK
+        false,      // flags: PSH
+        false,      // flags: RST
+        true,       // flags: SYN (only SYN is set)
+        false,      // flags: FIN
+        65535,      // window size
+        0xfe34,     // checksum (assumed precomputed)
+        0,          // urgent pointer
+        options,    // options: 6 words (24 bytes)
+    );
 
-// let mut addr_storage: libc::sockaddr_storage = unsafe { mem::zeroed() };
-// let mut len = mem::size_of_val(&addr_storage) as libc::socklen_t;
-//  // The `getsockname(2)` system call will intiliase `storage` for
-//  // us, setting `len` to the correct length.
-// let res = unsafe {
-//     libc::getsockname(
-//         socket.as_raw_fd(),
-//         (&mut addr_storage as *mut libc::sockaddr_storage).cast(),
-//         &mut len,
-//     )
-// };
+    // Pack the header.
+    let packed = tcp_header.pack();
 
-// if res == -1 {
-//     return Err(io::Error::last_os_error());
-// }
+    // For debugging you might print out the hex dump:
+    // dump_hex_file(&packed);
 
-// let address = unsafe { SockAddr::new(addr_storage, len) };
+    // Assert that the packed header matches the expected byte sequence.
 
-// create_and_send_syn_packet(&raw_socket, src_port, dest_ip, destination_port)?;
+    println!(
+        "TCP Header packed and expected 0x{:02x?},0x{:02x?}",
+        packed, expected
+    );
+    assert_eq!(
+        packed, expected,
+        "Packed TCP header did not match expected output"
+    );
+}
 
-// fn create_and_send_syn_packet(raw_socket: &Socket, source_port: u16, dest_ip: &Ipv4Addr, dest_port: u16) -> std::io::Result<()> {
-//    // 3. Create the SYN packet
-//     let mut syn_packet = create_syn_packet(source_port, dest_port);
-//     println!("SYN packet created");
-//     println!("    → Source Port: {}", syn_packet.source_port);
-//     println!("    → Destination Port: {}", syn_packet.destination_port);
-//     println!("    → Sequence Number: {}", syn_packet.sequence_number);
-//     println!("    → SYN Flag: {}", syn_packet.flags_syn);
+fn test_checksum_with_wikipedia_example() {
+    // The Wikipedia example IP header (without the checksum field)
+    let ip_header: [u8; 18] = [
+        0x45, 0x00, 0x00, 0x73, 0x00, 0x00, 0x40, 0x00, 0x40, 0x11, 0xc0, 0xa8, 0x00, 0x01, 0xc0,
+        0xa8, 0x00, 0xc7,
+    ];
 
-//     // Compute the TCP checksum
-//     syn_packet.checksum = compute_tcp_checksum(&syn_packet, &Ipv4Addr::new(127, 0, 0, 1), dest_ip);
-//     println!("TCP checksum computed: 0x{:04x}", syn_packet.checksum);
+    let computed_checksum = rfc1071_checksum(&ip_header);
+    let expected_checksum: [u8; 2] = [0xb8, 0x61]; // "b861" in hex
 
-//     // Construct the complete TCP/IP packet
-//     // We use localhost as source IP for now
-//     let complete_packet = construct_tcp_ip_packet(&syn_packet, &Ipv4Addr::new(127, 0, 0, 1), dest_ip);
-//     println!("Total size: {} bytes", complete_packet.len());
-//     println!("First 20 bytes (IP header): {:02x?}", &complete_packet[..20]);
-//     println!("Next 20 bytes (TCP header): {:02x?}", &complete_packet[20..40]);
-
-//     // 3. Create destination sockaddr
-//     let dest_addr = SockAddr::from(SocketAddr::new((*dest_ip).into(), dest_port));
-//     println!("Created destination socket, address: {:?}, port: {}", dest_addr.as_socket_ipv4().unwrap().ip(), dest_addr.as_socket_ipv4().unwrap().port());
-
-//     // 4. Send the SYN packet
-//     println!("\n📤 Sending SYN packet...");
-//     match raw_socket.send_to(&complete_packet, &dest_addr) {
-//         Ok(bytes) => println!("  ✅ Sent {} bytes successfully", bytes),
-//         Err(e) => {
-//             println!("  ❌ Send failed: {}", e);
-//             return Err(e);
-//         }
-//     }
-
-//     // 5. Wait for response
-//     let mut buf = [MaybeUninit::uninit(); 65535];
-//     raw_socket.set_read_timeout(Some(Duration::from_millis(1500)))?;
-
-//     // 6. Receive response and return the port state
-//     match raw_socket.recv(&mut buf) {
-//         Ok(n) if n >= 40 => {
-//             println!("  Received {} bytes", n);
-
-//             let received_data = &buf[..n];
-//             let buf: Vec<u8> = received_data
-//                 .iter()
-//                 .map(|b| unsafe { b.assume_init() })
-//                 .collect();
-
-//             let ip_header_len = (buf[0] & 0x0f) * 4;
-//             let tcp_flags = buf[(ip_header_len + 13) as usize];
-//             println!("  TCP Flags received: 0x{:02x}", tcp_flags);
-
-//             Ok(match tcp_flags {
-//                 f if f & 0x12 == 0x12 => {
-//                     println!("  🟢 Detected: SYN-ACK (Port Open)");
-//                     PortState::Open;
-//                 }
-//                 f if f & 0x04 == 0x04 => {
-//                     println!("  🔴 Detected: RST (Port Closed)");
-//                     PortState::Closed;
-//                 }
-//                 _ => {
-//                     println!("  🟡 Detected: Unknown response (Port Filtered)");
-//                     PortState::Filtered;
-//                 }
-//             })
-//         }
-//         Ok(n) => {
-//             println!("  Received packet too small: {} bytes", n);
-//             Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Received packet too small"))
-//         },
-//         Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-//             println!("  No response received (timeout)");
-//             Err(std::io::Error::new(std::io::ErrorKind::WouldBlock, "No response received"))
-//         },
-//         Err(e) => {
-//             println!("  ❌ Error receiving response: {}", e);
-//             Err(e)
-//         }
-// }
-// }
+    assert_eq!(
+        computed_checksum, expected_checksum,
+        "Checksum did not match expected value!"
+    );
+    println!(
+        "Wikipedia example checksum results: {:04x?}, {:04x?}",
+        computed_checksum, expected_checksum
+    );
+}
