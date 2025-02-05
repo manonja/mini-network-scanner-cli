@@ -89,6 +89,10 @@ impl TcpHeader {
         let self_length_in_32_bit_words = 5 + self.options.capacity();
         let mut buffer = Vec::with_capacity(self_length_in_32_bit_words * 4);
 
+        // Store checksum value and temporarily set to 0 for calculation
+        let original_checksum = self.checksum;
+        self.checksum = 0;
+
         println!("source port in buffer {}", self.source_port);
         println!("self {:?}", self);
         println!(
@@ -97,7 +101,7 @@ impl TcpHeader {
             self.options.capacity()
         );
 
-        // TODO: replace all `extend_from_slide` to `push`
+        // Pack all fields into buffer
         buffer.extend_from_slice(&self.source_port.to_be_bytes());
         buffer.extend_from_slice(&self.destination_port.to_be_bytes());
         buffer.extend_from_slice(&self.sequence_number.to_be_bytes());
@@ -106,29 +110,7 @@ impl TcpHeader {
         // let offset_and_reserved: u8 = (self_length << 4);
         let offset_and_reserved: u8 = (self_length_in_32_bit_words as u8) << 4;
         buffer.push(offset_and_reserved);
-        // TODO: remove debug code
-        println!(
-            "Header length                     {}",
-            self_length_in_32_bit_words
-        );
-        println!(
-            "Header length                     {:08b}",
-            self_length_in_32_bit_words
-        );
-        println!(
-            "Header length in BE               {:08b}",
-            self_length_in_32_bit_words.to_be()
-        );
-        println!(
-            "Header length in BE shifted by 4  {:08b}",
-            self_length_in_32_bit_words.to_be() >> 4
-        );
-        println!(
-            "Offet and reserved                {:08b}",
-            offset_and_reserved
-        );
 
-        // Pack the flags into a single byte
         let flags: u8 = ((self.flags_cwr as u8) << 7)
             | ((self.flags_ece as u8) << 6)
             | ((self.flags_urg as u8) << 5)
@@ -155,10 +137,17 @@ impl TcpHeader {
                 .collect::<Vec<u8>>(),
         );
 
-        if self.checksum == 0 {
+        // Calculate checksum if not already set
+        if original_checksum == 0 {
             self.checksum = u16::from_be_bytes(rfc1071_checksum(&buffer));
-            return self.pack();
+            // Update checksum in buffer directly
+            buffer[16..18].copy_from_slice(&self.checksum.to_be_bytes());
+        } else {
+            // Restore original checksum
+            self.checksum = original_checksum;
+            buffer[16..18].copy_from_slice(&self.checksum.to_be_bytes());
         }
+
         buffer
     }
 }
@@ -246,7 +235,7 @@ impl Ipv4Header {
         }
 
         println!(
-            "IP pack created: {:02x?} with checksum: 0x{:04x}",
+            "IP header created: {:02x?} with checksum: 0x{:04x}",
             buffer, self.checksum
         );
 
@@ -288,12 +277,12 @@ fn help(program_name: &str) {
     {program_name} --help
     {program_name} -h
 
-    {program_name} --scan <ip_address>:<port>  --src <source_ip>
+    {program_name} -- --scan <ip_address>:<port>  --src <source_ip>
     {program_name} -s <ip_address>:<port> -r <source_ip>
 
     Examples:
-    {program_name} --scan 127.0.0.1:80 --src 127.0.0.1        # Scans port 80 on localhost
-    {program_name} --scan 192.168.1.1:443 -r 127.0.0.1
+    {program_name} -- --scan 127.0.0.1:80 --src 127.0.0.1        # Scans port 80 on localhost
+    
 
 
 ************************************************************************************************
@@ -310,7 +299,7 @@ fn construct_ip_package_for_tcp_header(
     // First create the TCP header with checksum
     let tcp_packet = tcp_header.pack();
 
-    println!("TCP_PACKET XIN CONSTRUCT IP PACKAGE 0x{:04x?}", tcp_packet);
+    println!("TCP_PACKET SYN CONSTRUCT IP PACKAGE 0x{:02x?}", tcp_packet);
 
     // Calculate total length (IP header + TCP header + options)
     let total_length = (20 + tcp_packet.len()) as u16;
@@ -325,14 +314,14 @@ fn construct_ip_package_for_tcp_header(
         6, // TCP protocol number
     );
 
-    println!("*******IP Packet:********* {:02x?}", packet);
-
     //     println!("Total size: {} bytes", complete_packet.len());
     //     println!("First 20 bytes (IP header): {:02x?}", &complete_packet[..20]);
     //     println!("Next 20 bytes (TCP header): {:02x?}", &complete_packet[20..40]);
 
     // Add TCP header and data
     packet.extend_from_slice(&tcp_packet);
+
+    println!("Full IP package       {:02x?}", packet);
 
     packet
 }
@@ -431,6 +420,10 @@ fn tcp_syn_scan(
     println!("\n📡 Creating raw socket...");
     let raw_socket = Socket::new(Domain::IPV4, Type::RAW, Some(Protocol::TCP))?;
 
+    // Set IP_HDRINCL using socket2's built-in method.
+    raw_socket.set_header_included_v4(true)?;
+    println!("IP_HDRINCL set successfully.");
+
     let lowest_listen_port = 1024;
     let source_port = rand::thread_rng().gen_range(lowest_listen_port..u16::MAX);
     let raw_socket_address = SocketAddr::new(IpAddr::V4(*source_ip), source_port);
@@ -464,10 +457,24 @@ fn tcp_syn_scan(
     let ip_syn_package =
         construct_ip_package_for_tcp_header(&mut syn_packet, source_ip, destination_ip);
     println!("Let's send our package");
-    println!("Length of our ip_package {}", ip_syn_package.len());
+    println!("Full IP package main: {}", ip_syn_package.len());
+
+    // Create a loop to wait until we receive a response
+    // If we receive SYN+ACK in the buffer, then the connection is open.
+
+    // 3. Set a read timeout so we don't block forever.
+    raw_socket.set_read_timeout(Some(Duration::from_secs(10)))?;
+
+    // 4. Receive a response.
+    // We'll allocate a buffer for receiving data.
+    const BUFFER_SIZE: usize = 100;
+
+    // Create a buffer of unitialised bytes
+    let mut recv_buffer: Vec<MaybeUninit<u8>> = vec![MaybeUninit::uninit(); BUFFER_SIZE];
+    println!("Starting to receive for an answer...👂");
 
     let send_buffer = ip_syn_package.as_slice();
-
+    println!("{}", format_hexdump(send_buffer));
     let send_result = raw_socket.send(send_buffer);
 
     match send_result {
@@ -475,23 +482,17 @@ fn tcp_syn_scan(
         Err(error) => println!("OOps 💩: {}", error),
     }
 
-    // Create a loop to wait until we receive a response
-    // If we receive SYN+ACK in the buffer, then the connection is open.
-
-    // 3. Set a read timeout so we don't block forever.
-    raw_socket.set_read_timeout(Some(Duration::from_secs(3)))?;
-
-    // 4. Receive a response.
-    // We'll allocate a buffer for receiving data.
-    const BUFFER_SIZE: usize = 1500;
     loop {
-        // Create a buffer of unitialised bytes
-        let mut recv_buffer: Vec<MaybeUninit<u8>> = vec![MaybeUninit::uninit(); BUFFER_SIZE];
+        println!("try to receive");
+        let res = raw_socket.recv(&mut recv_buffer[..]);
+        println!("Maybe received...");
 
         // Call recv() on our raw socket
-        match raw_socket.recv(&mut recv_buffer[..]) {
+        match res {
             Ok(received) => {
                 if received == 0 {
+                    println!("I continue!!");
+
                     continue; //nothing received, try again
                 }
                 let buf: &[u8] = unsafe {
@@ -502,12 +503,14 @@ fn tcp_syn_scan(
                 // 5. Parse the IP header to determine where the TCP header starts
                 if received < 20 {
                     // not a full IP header, continue parsing
+                    println!("Not a full IP Header yet, I continue! !");
                     continue;
                 }
 
                 let ip_header_len = (buf[0] & 0x0f) * 4; // IP header length in bytes
                 if received < (ip_header_len as usize + 20) {
                     // Not enough bytes for a TCP header; continue waiting.
+                    println!("Not enough bytes for a TCP header, I continue! !");
                     continue;
                 }
 
@@ -542,7 +545,7 @@ fn tcp_syn_scan(
             Err(e) => {
                 // If the error is a timeout (WouldBlock or TimedOut), assume no response.
                 println!("Receive error: {}", e);
-                return Ok(PortState::Filtered);
+                //return Ok(PortState::Filtered);
             }
         }
 
@@ -762,4 +765,47 @@ fn test_checksum_with_wikipedia_example() {
         "Wikipedia example checksum results: {:04x?}, {:04x?}",
         computed_checksum, expected_checksum
     );
+}
+
+fn format_hexdump(data: &[u8]) -> String {
+    let mut result = String::new();
+    let chunks = data.chunks(16);
+
+    for (i, chunk) in chunks.enumerate() {
+        // Address column
+        result.push_str(&format!("0x{:04x}:  ", i * 16));
+
+        // Hex representation
+        for (j, byte) in chunk.iter().enumerate() {
+            result.push_str(&format!("{:02x}", byte));
+
+            // Add space after every byte, and an extra space after 8 bytes
+            if j < chunk.len() - 1 {
+                result.push(' ');
+                if j == 7 {
+                    result.push(' ');
+                }
+            }
+        }
+
+        // Padding for incomplete lines to align ASCII section
+        if chunk.len() < 16 {
+            let padding = (16 - chunk.len()) * 3 + if chunk.len() <= 8 { 1 } else { 0 };
+            result.push_str(&" ".repeat(padding));
+        }
+
+        // ASCII representation
+        result.push_str("  ");
+        for &byte in chunk {
+            if byte.is_ascii_graphic() {
+                result.push(byte as char);
+            } else {
+                result.push('.');
+            }
+        }
+
+        result.push('\n');
+    }
+
+    result
 }
