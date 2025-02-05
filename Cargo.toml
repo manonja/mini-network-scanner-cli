@@ -1,7 +1,10 @@
 [package]
-name = "mini-network-scanner-cli"
+name = "maja-scan"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 pnet_packet = "^0.35.0"
+socket2 = { version = "0.5.7", features = ["all"] }
+rand = "0.8"
+libc = "0.2"
