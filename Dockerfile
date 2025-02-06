@@ -16,6 +16,8 @@ RUN apt-get update && apt-get install -y \
     tcpdump \
     tmux \
     vim \
+    netcat-openbsd \
+    nmap \
     && rm -rf /var/lib/apt/lists/*
 
 # Deminimize Ubuntu
@@ -34,7 +36,6 @@ USER developer
 # Create .cargo directory for developer user
 RUN mkdir -p /home/developer/.cargo
 
-
 # Install Rust
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 ENV PATH="/home/developer/.cargo/bin:${PATH}"
@@ -46,15 +47,10 @@ VOLUME ["/home/developer/app"]
 
 # # Compile tcp-dump
 WORKDIR /home/developer/app/tcp-server
+
+# (Optional) Uncomment and adjust if you need to compile any C code
 # RUN gcc -o tcp-dump tcp-dump.c
 
-
-# # Return to app directory
-# WORKDIR /app
-
-# # Make tmux script executable
-# RUN chmod +x tmux-setup.sh
-
+# (Optional) Other steps like exposing ports or starting scripts can remain commented out.
 # EXPOSE 8080
-
 # CMD ["./tmux-setup.sh"]
