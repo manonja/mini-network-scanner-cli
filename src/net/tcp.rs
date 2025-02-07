@@ -101,9 +101,7 @@ pub fn create_syn_packet(source_port: u16, destination_port: u16) -> TcpHeader {
 
 impl TcpHeader {
     pub fn pack(self: &mut TcpHeader) -> Vec<u8> {
-        // The TCP self length is 20 bytes, plus 4 bytes for each option
-        let self_length_in_32_bit_words = 5 + self.options.capacity();
-        let mut buffer = Vec::with_capacity(self_length_in_32_bit_words * 4);
+        let mut buffer = Vec::with_capacity(self.length_usize() * 4);
 
         println!("source port in buffer {}", self.source_port);
         println!("self {:?}", self);
@@ -120,7 +118,7 @@ impl TcpHeader {
         buffer.extend_from_slice(&self.ack_number.to_be_bytes());
 
         // let offset_and_reserved: u8 = (self_length << 4);
-        let offset_and_reserved: u8 = (self_length_in_32_bit_words as u8) << 4;
+        let offset_and_reserved: u8 = self.header_length << 4;
         buffer.push(offset_and_reserved);
 
         let flags: u8 = ((self.flags_cwr as u8) << 7)
@@ -150,6 +148,16 @@ impl TcpHeader {
         );
 
         buffer
+    }
+
+    /// The TCP length is 20 bytes, plus 4 bytes for each option.
+    pub fn length(self: &TcpHeader) -> u32 {
+        5 + u32::try_from(self.options.capacity()).unwrap()
+    }
+
+    /// The TCP length is 20 bytes, plus 4 bytes for each option in usize so not really accurate if converted to bytes.
+    pub fn length_usize(self: &TcpHeader) -> usize {
+        5 + self.options.capacity()
     }
 }
 

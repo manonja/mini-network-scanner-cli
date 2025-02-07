@@ -1,6 +1,8 @@
 use super::{checksum::rfc1071_checksum, tcp::TcpHeader};
 use std::net::Ipv4Addr;
 
+const TCP_PROTOCOL_NUM: u8 = 6;
+
 pub struct Ipv4Header {
     // version: 4 bits
     pub version: u8,
@@ -102,6 +104,18 @@ pub fn construct_ip_package_for_tcp_header(
     source_ip: &Ipv4Addr,
     dest_ip: &Ipv4Addr,
 ) -> Vec<u8> {
+    // Let us check if tcp checksum is 0.
+    if tcp_header.checksum == 0 {
+        let mut proto_header_buffer: Vec<u8> = Vec::new();
+        proto_header_buffer.extend_from_slice(&source_ip.to_bits().to_be_bytes());
+        proto_header_buffer.extend_from_slice(&dest_ip.to_bits().to_be_bytes());
+        proto_header_buffer.push(0_u8);
+        proto_header_buffer.push(TCP_PROTOCOL_NUM);
+        proto_header_buffer.extend_from_slice(&tcp_header.length().to_be_bytes());
+
+        tcp_header.checksum = u16::from_be_bytes(rfc1071_checksum(&proto_header_buffer));
+    }
+
     // First create the TCP header with checksum
     let tcp_packet = tcp_header.pack();
 
