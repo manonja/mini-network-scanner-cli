@@ -7,7 +7,10 @@ pub fn format_hexdump(data: &[u8]) -> String {
     let mut result = String::new();
     let chunks = data.chunks(16);
 
+    let mut odd;
+
     for (i, chunk) in chunks.enumerate() {
+        odd = false;
         // Address column
         result.push_str(&format!("0x{:04x}:  ", i * 16));
 
@@ -17,10 +20,10 @@ pub fn format_hexdump(data: &[u8]) -> String {
 
             // Add space after every byte, and an extra space after 8 bytes
             if j < chunk.len() - 1 {
-                result.push(' ');
-                if j == 7 {
+                if odd {
                     result.push(' ');
                 }
+                odd = !odd;
             }
         }
 

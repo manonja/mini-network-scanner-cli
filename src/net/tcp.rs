@@ -82,7 +82,7 @@ pub fn create_syn_packet(source_port: u16, destination_port: u16) -> TcpHeader {
         destination_port,
         0,     // sequence number
         0,     // ack number
-        0,     // data offset, should be set by our packer
+        6,     // data offset, should be set by our packer
         0,     // reserved
         false, // CWR flag
         false, // ECE flag
@@ -117,7 +117,7 @@ impl TcpHeader {
         buffer.extend_from_slice(&self.sequence_number.to_be_bytes());
         buffer.extend_from_slice(&self.ack_number.to_be_bytes());
 
-        // let offset_and_reserved: u8 = (self_length << 4);
+        assert!(self.header_length >= 6);
         let offset_and_reserved: u8 = self.header_length << 4;
         buffer.push(offset_and_reserved);
 

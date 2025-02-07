@@ -69,8 +69,6 @@ pub fn tcp_syn_scan(
     let ip_syn_package =
         construct_ip_package_for_tcp_header(&mut syn_packet, source_ip, destination_ip);
 
-    println!("Let's send our package 🚀");
-
     // 5. Set a read timeout so we don't block forever.
     raw_socket.set_read_timeout(Some(Duration::from_secs(10)))?;
 
@@ -80,9 +78,10 @@ pub fn tcp_syn_scan(
 
     // 7. Create a buffer of unitialised bytes
     let mut recv_buffer: Vec<MaybeUninit<u8>> = vec![MaybeUninit::uninit(); BUFFER_SIZE];
-    println!("Starting to receive for an answer...👂");
 
     let send_buffer = ip_syn_package.as_slice();
+
+    println!("Let's send our package 🚀, here is what we will send");
     println!("{}", format_hexdump(send_buffer));
     let send_result = raw_socket.send(send_buffer);
 
@@ -98,26 +97,30 @@ pub fn tcp_syn_scan(
 
         // 8. Call recv() on our raw socket
         match res {
-            Ok(received) => {
-                if received == 0 {
+            Ok(num_bytes_received) => {
+                if num_bytes_received == 0 {
                     println!("I continue!!");
 
                     continue; //nothing received, try again
                 }
                 let buf: &[u8] = unsafe {
-                    std::slice::from_raw_parts(recv_buffer.as_ptr() as *const u8, received)
+                    std::slice::from_raw_parts(
+                        recv_buffer.as_ptr() as *const u8,
+                        num_bytes_received,
+                    )
                 };
-                println!("Received {} bytes: {:02x?}", received, buf);
+                println!("Received {}", num_bytes_received);
+                println!("{}", format_hexdump(buf));
 
                 // 9. Parse the IP header to determine where the TCP header starts
-                if received < 20 {
+                if num_bytes_received < 20 {
                     // not a full IP header, continue parsing
                     println!("Not a full IP Header yet, I continue! !");
                     continue;
                 }
 
                 let ip_header_len = (buf[0] & 0x0f) * 4; // IP header length in bytes
-                if received < (ip_header_len as usize + 20) {
+                if num_bytes_received < (ip_header_len as usize + 20) {
                     // Not enough bytes for a TCP header; continue waiting.
                     println!("Not enough bytes for a TCP header, I continue! !");
                     continue;

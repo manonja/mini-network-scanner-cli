@@ -1,7 +1,10 @@
+use crate::hextools::format_hexdump;
+
 use super::{checksum::rfc1071_checksum, tcp::TcpHeader};
 use std::net::Ipv4Addr;
 
 const TCP_PROTOCOL_NUM: u8 = 6;
+const IP_HEADER_LENGTH: u16 = 20;
 
 pub struct Ipv4Header {
     // version: 4 bits
@@ -60,7 +63,7 @@ pub fn create_ip_packet(
 
 impl Ipv4Header {
     pub fn pack(self: &mut Ipv4Header) -> Vec<u8> {
-        let mut buffer = Vec::with_capacity(20);
+        let mut buffer = Vec::with_capacity(usize::from(IP_HEADER_LENGTH));
 
         // 1. First byte: Version (4 bits) + IHL (4 bits)
         let v_ihl = (self.version << 4) | (self.ihl & 0x0F);
@@ -89,11 +92,6 @@ impl Ipv4Header {
             return self.pack();
         }
 
-        println!(
-            "IP header created: {:02x?} with checksum: 0x{:04x}",
-            buffer, self.checksum
-        );
-
         buffer
     }
 }
@@ -114,21 +112,25 @@ pub fn construct_ip_package_for_tcp_header(
         proto_header_buffer.extend_from_slice(&tcp_header.length().to_be_bytes());
 
         tcp_header.checksum = u16::from_be_bytes(rfc1071_checksum(&proto_header_buffer));
+        println!("** TCP Proto header **");
+        println!("{}", format_hexdump(&proto_header_buffer));
+        println!("Checksum: {}", tcp_header.checksum);
     }
 
     // First create the TCP header with checksum
     let tcp_packet = tcp_header.pack();
 
-    println!("TCP_PACKET SYN CONSTRUCT IP PACKAGE 0x{:02x?}", tcp_packet);
+    println!("Raw TCP package");
+    println!("{}", format_hexdump(&tcp_packet));
 
     // Calculate total length (IP header + TCP header + options)
-    let total_length = (20 + tcp_packet.len()) as u16;
+    let ip_packet_length = (usize::from(IP_HEADER_LENGTH) + tcp_packet.len()) as u16;
     println!("TCP packet length: {}", tcp_packet.len());
-    println!("Total length tcp+ip: {}", total_length);
+    println!("Total length tcp+ip: {}", ip_packet_length);
 
     // Create IP packet
-    let mut packet = create_ip_packet(
-        total_length,
+    let mut ip_packet = create_ip_packet(
+        ip_packet_length,
         source_ip,
         dest_ip,
         6, // TCP protocol number
@@ -139,11 +141,9 @@ pub fn construct_ip_package_for_tcp_header(
     //     println!("Next 20 bytes (TCP header): {:02x?}", &complete_packet[20..40]);
 
     // Add TCP header and data
-    packet.extend_from_slice(&tcp_packet);
+    ip_packet.extend_from_slice(&tcp_packet);
 
-    println!("Full IP package       {:02x?}", packet);
-
-    packet
+    ip_packet
 }
 
 #[cfg(test)]
