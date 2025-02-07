@@ -1,5 +1,3 @@
-use crate::net::checksum::rfc1071_checksum;
-
 /// Represents the structure of a TCP header
 #[derive(Debug, Clone)]
 #[repr(C)]
@@ -107,10 +105,6 @@ impl TcpHeader {
         let self_length_in_32_bit_words = 5 + self.options.capacity();
         let mut buffer = Vec::with_capacity(self_length_in_32_bit_words * 4);
 
-        // Store checksum value and temporarily set to 0 for calculation
-        let original_checksum = self.checksum;
-        self.checksum = 0;
-
         println!("source port in buffer {}", self.source_port);
         println!("self {:?}", self);
         println!(
@@ -154,17 +148,6 @@ impl TcpHeader {
                 .flat_map(|o| o.to_be_bytes())
                 .collect::<Vec<u8>>(),
         );
-
-        // Calculate checksum if not already set
-        if original_checksum == 0 {
-            self.checksum = u16::from_be_bytes(rfc1071_checksum(&buffer));
-            // Update checksum in buffer directly
-            buffer[16..18].copy_from_slice(&self.checksum.to_be_bytes());
-        } else {
-            // Restore original checksum
-            self.checksum = original_checksum;
-            buffer[16..18].copy_from_slice(&self.checksum.to_be_bytes());
-        }
 
         buffer
     }
