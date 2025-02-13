@@ -100,8 +100,19 @@ pub fn create_syn_packet(source_port: u16, destination_port: u16) -> TcpHeader {
 }
 
 impl TcpHeader {
+    /// Calculate the header length in 32-bit words.
+    /// This is the 5 fixed words plus one word per option.
+    pub fn header_length_words(&self) -> u8 {
+        5 + (self.options.len() as u8)
+    }
+
     pub fn pack(self: &mut TcpHeader) -> Vec<u8> {
-        let mut buffer = Vec::with_capacity(self.length_usize() * 4);
+        let header_length = self.header_length_words();
+
+        // Each word is 4 bytes, so the total length in bytes is:
+        let total_length_bytes = header_length as usize * 4;
+        let mut buffer = Vec::with_capacity(total_length_bytes);
+        // let mut buffer = Vec::with_capacity(self.length_usize() * 4);
 
         println!("source port in buffer {}", self.source_port);
         println!("self {:?}", self);
@@ -111,14 +122,13 @@ impl TcpHeader {
             self.options.capacity()
         );
 
-        // Pack all fields into buffer
+        // Pack all fixed fields into buffer
         buffer.extend_from_slice(&self.source_port.to_be_bytes());
         buffer.extend_from_slice(&self.destination_port.to_be_bytes());
         buffer.extend_from_slice(&self.sequence_number.to_be_bytes());
         buffer.extend_from_slice(&self.ack_number.to_be_bytes());
 
-        assert!(self.header_length >= 6);
-        let offset_and_reserved: u8 = self.header_length << 4;
+        let offset_and_reserved: u8 = (header_length << 4) | (self.reserved & 0x0F);
         buffer.push(offset_and_reserved);
 
         let flags: u8 = ((self.flags_cwr as u8) << 7)
@@ -149,16 +159,6 @@ impl TcpHeader {
 
         buffer
     }
-
-    /// The TCP length is 20 bytes, plus 4 bytes for each option.
-    pub fn length(self: &TcpHeader) -> u32 {
-        5 + u32::try_from(self.options.capacity()).unwrap()
-    }
-
-    /// The TCP length is 20 bytes, plus 4 bytes for each option in usize so not really accurate if converted to bytes.
-    pub fn length_usize(self: &TcpHeader) -> usize {
-        5 + self.options.capacity()
-    }
 }
 
 #[cfg(test)]
@@ -166,51 +166,49 @@ mod tests {
     use super::*;
 
     fn test_tcp_header_pack() {
-        // Expected TCP header (44 bytes):
-        // Breakdown:
-        //   [0-1]   Source Port:       0xeb1e        (60190)
-        //   [2-3]   Destination Port:  0x1f90        (8080)
-        //   [4-7]   Sequence Number:   0xe608ebd5
+        // Expected TCP header (44 bytes) as seen in Wireshark:
+        //   [0-1]   Source Port:       0xcf4a        (53066)
+        //   [2-3]   Destination Port:  0x240d        (9229)
+        //   [4-7]   Sequence Number:   0x0c08a8b4    (201894068)
         //   [8-11]  Ack Number:        0x00000000
         //   [12]    Data Offset:       11 (0xb0 when shifted left by 4 bits)
         //   [13]    Flags:             0x02         (only SYN set)
         //   [14-15] Window:            0xffff       (65535)
         //   [16-17] Checksum:          0xfe34
         //   [18-19] Urgent Pointer:    0x0000
-        //   [20-43] Options (6 x 4 bytes):
-        //           0x02043fd8, 0x01030306, 0x0101080a, 0x3648aacd, 0x00000000, 0x04020000
+        //   [20-43] Options (24 bytes, 6 words):
+        //           0x02043fd8, 0x01030306, 0x0101080a, 0x036f186b, 0x00000000, 0x04020000
         let expected: Vec<u8> = vec![
-            0xeb, 0x1e, // Source Port (60190)
-            0x1f, 0x90, // Destination Port (8080)
-            0xe6, 0x08, 0xeb, 0xd5, // Sequence Number (0xe608ebd5)
+            0xcf, 0x4a, // Source Port (53066)
+            0x24, 0x0d, // Destination Port (9229)
+            0x0c, 0x08, 0xa8, 0xb4, // Sequence Number (0x0c08a8b4)
             0x00, 0x00, 0x00, 0x00, // Ack Number (0)
-            0xb0, // Data Offset: (11 << 4) = 0xb0 (44-byte header)
-            0x02, // Flags: 0x02 (SYN only)
+            0xb0, // Data Offset: 11 << 4 = 0xb0
+            0x02, // Flags: SYN only
             0xff, 0xff, // Window (65535)
             0xfe, 0x34, // Checksum (0xfe34)
             0x00, 0x00, // Urgent Pointer (0)
             // Options (24 bytes, 6 words)
-            0x02, 0x04, 0x3f, 0xd8, // Option 1: MSS option: 0x02043fd8
-            0x01, 0x03, 0x03, 0x06, // Option 2: (0x01030306)
-            0x01, 0x01, 0x08, 0x0a, // Option 3: (0x0101080a)
-            0x36, 0x48, 0xaa, 0xcd, // Option 4: (0x3648aacd)
-            0x00, 0x00, 0x00, 0x00, // Option 5: (0x00000000)
-            0x04, 0x02, 0x00, 0x00, // Option 6: (0x04020000)
+            0x02, 0x04, 0x3f, 0xd8, // Option 1: 0x02043fd8
+            0x01, 0x03, 0x03, 0x06, // Option 2: 0x01030306
+            0x01, 0x01, 0x08, 0x0a, // Option 3: 0x0101080a
+            0x03, 0x6f, 0x18, 0x6b, // Option 4: 0x036f186b
+            0x00, 0x00, 0x00, 0x00, // Option 5: 0x00000000
+            0x04, 0x02, 0x00, 0x00, // Option 6: 0x04020000
         ];
 
-        // Build the options vector.
-        // Make sure each u32 is given in hexadecimal exactly as expected.
+        // Build the options vector. Note the update on the 4th option.
         let options = vec![
-            0x02043fd8, 0x01030306, 0x0101080a, 0x3648aacd, 0x00000000, 0x04020000,
+            0x02043fd8, 0x01030306, 0x0101080a, 0x036f186b, // Updated to match Wireshark
+            0x00000000, 0x04020000,
         ];
 
         // Create the TCP header with the given values.
-        // Note: The data offset in the final header is computed as:
-        //       5 (base header words) + options.len() (6) = 11 words.
+        // The header length is computed as 5 (base header words) + options.len() (6) = 11 words.
         let mut tcp_header = create_tcp_packet(
-            60190,      // source_port
-            8080,       // destination_port
-            0xe608ebd5, // sequence_number (nonzero to match expected)
+            53066,      // source_port updated to 53066
+            9229,       // destination_port updated to 9229
+            0x0c08a8b4, // sequence_number updated to 0x0c08a8b4
             0,          // ack_number
             0,          // header_length parameter (ignored in pack())
             0,          // reserved
@@ -223,23 +221,20 @@ mod tests {
             true,       // flags: SYN (only SYN is set)
             false,      // flags: FIN
             65535,      // window size
-            0xfe34,     // checksum (assumed precomputed)
+            0xfe34,     // checksum (precomputed)
             0,          // urgent pointer
-            options,    // options: 6 words (24 bytes)
+            options,    // options vector (6 words)
         );
 
         // Pack the header.
         let packed = tcp_header.pack();
 
-        // For debugging you might print out the hex dump:
-        // dump_hex_file(&packed);
-
-        // Assert that the packed header matches the expected byte sequence.
-
+        // For debugging, print the hex dump of the packed header.
         println!(
-            "TCP Header packed and expected 0x{:02x?},0x{:02x?}",
+            "TCP Header packed: 0x{:02x?}\nExpected: 0x{:02x?}",
             packed, expected
         );
+
         assert_eq!(
             packed, expected,
             "Packed TCP header did not match expected output"

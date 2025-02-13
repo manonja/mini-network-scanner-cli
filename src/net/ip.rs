@@ -109,7 +109,7 @@ pub fn construct_ip_package_for_tcp_header(
         proto_header_buffer.extend_from_slice(&dest_ip.to_bits().to_be_bytes());
         proto_header_buffer.push(0_u8);
         proto_header_buffer.push(TCP_PROTOCOL_NUM);
-        proto_header_buffer.extend_from_slice(&tcp_header.length().to_be_bytes());
+        proto_header_buffer.extend_from_slice(&tcp_header.header_length_words().to_be_bytes());
 
         tcp_header.checksum = u16::from_be_bytes(rfc1071_checksum(&proto_header_buffer));
         println!("** TCP Proto header **");
