@@ -102,46 +102,63 @@ pub fn construct_ip_package_for_tcp_header(
     source_ip: &Ipv4Addr,
     dest_ip: &Ipv4Addr,
 ) -> Vec<u8> {
-    // Let us check if tcp checksum is 0.
-    if tcp_header.checksum == 0 {
-        let mut proto_header_buffer: Vec<u8> = Vec::new();
-        proto_header_buffer.extend_from_slice(&source_ip.to_bits().to_be_bytes());
-        proto_header_buffer.extend_from_slice(&dest_ip.to_bits().to_be_bytes());
-        proto_header_buffer.push(0_u8);
-        proto_header_buffer.push(TCP_PROTOCOL_NUM);
-        proto_header_buffer.extend_from_slice(&tcp_header.header_length_words().to_be_bytes());
-
-        tcp_header.checksum = u16::from_be_bytes(rfc1071_checksum(&proto_header_buffer));
-        println!("** TCP Proto header **");
-        println!("{}", format_hexdump(&proto_header_buffer));
-        println!("Checksum: {}", tcp_header.checksum);
+    // --- Step 1: Pack the TCP header and zero out the checksum field ---
+    let mut tcp_header_bytes = tcp_header.pack();
+    // The checksum field is at offset 16-17 in the TCP header.
+    if tcp_header_bytes.len() >= 18 {
+        tcp_header_bytes[16] = 0;
+        tcp_header_bytes[17] = 0;
+    } else {
+        eprintln!("Error: TCP header is too short to zero out checksum.");
     }
 
-    // First create the TCP header with checksum
-    let tcp_packet = tcp_header.pack();
+    // Compute the TCP segment length (header + options + payload, if any)
+    let tcp_length = tcp_header_bytes.len() as u16;
 
-    println!("Raw TCP package");
-    println!("{}", format_hexdump(&tcp_packet));
+    // --- Step 2: Build the pseudo header ---
+    // Pseudo header structure:
+    // [Source IP (4 bytes)] + [Destination IP (4 bytes)] +
+    // [Zero (1 byte)] + [Protocol (1 byte)] + [TCP length (2 bytes)]
+    let mut pseudo_header = Vec::with_capacity(12);
+    pseudo_header.extend_from_slice(&source_ip.octets());
+    pseudo_header.extend_from_slice(&dest_ip.octets());
+    pseudo_header.push(0); // zero byte
+    pseudo_header.push(TCP_PROTOCOL_NUM); // TCP protocol number (typically 6)
+    pseudo_header.extend_from_slice(&tcp_length.to_be_bytes());
 
+    // --- Step 3: Combine pseudo header and TCP header bytes ---
+    let mut checksum_buffer = Vec::new();
+    checksum_buffer.extend_from_slice(&pseudo_header);
+    checksum_buffer.extend_from_slice(&tcp_header_bytes);
+
+    // If the combined length is odd, pad with an extra zero byte.
+    if checksum_buffer.len() % 2 != 0 {
+        checksum_buffer.push(0);
+    }
+
+    // --- Step 4: Compute the checksum over the entire buffer ---
+    let checksum_bytes = rfc1071_checksum(&checksum_buffer);
+    let checksum = u16::from_be_bytes(checksum_bytes);
+    tcp_header.checksum = checksum;
+    println!("Computed TCP checksum: 0x{:04x}", checksum);
+
+    // --- Step 5: Repack the TCP header with the correct checksum ---
+    let final_tcp_packet = tcp_header.pack();
+
+    println!("Raw TCP package:");
+    println!("{}", format_hexdump(&final_tcp_packet));
+
+    // --- Step 6: Create the IP packet ---
     // Calculate total length (IP header + TCP header + options)
-    let ip_packet_length = (usize::from(IP_HEADER_LENGTH) + tcp_packet.len()) as u16;
-    println!("TCP packet length: {}", tcp_packet.len());
+    let ip_packet_length = (usize::from(IP_HEADER_LENGTH) + final_tcp_packet.len()) as u16;
+    println!("TCP packet length: {}", final_tcp_packet.len());
     println!("Total length tcp+ip: {}", ip_packet_length);
 
-    // Create IP packet
-    let mut ip_packet = create_ip_packet(
-        ip_packet_length,
-        source_ip,
-        dest_ip,
-        6, // TCP protocol number
-    );
+    // Create the IP header using the computed total length.
+    let mut ip_packet = create_ip_packet(ip_packet_length, source_ip, dest_ip, TCP_PROTOCOL_NUM);
 
-    //     println!("Total size: {} bytes", complete_packet.len());
-    //     println!("First 20 bytes (IP header): {:02x?}", &complete_packet[..20]);
-    //     println!("Next 20 bytes (TCP header): {:02x?}", &complete_packet[20..40]);
-
-    // Add TCP header and data
-    ip_packet.extend_from_slice(&tcp_packet);
+    // Append the finalized TCP header to the IP header.
+    ip_packet.extend_from_slice(&final_tcp_packet);
 
     ip_packet
 }

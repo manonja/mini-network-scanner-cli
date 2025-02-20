@@ -92,7 +92,7 @@ pub fn create_syn_packet(source_port: u16, destination_port: u16) -> TcpHeader {
         false, // RST flag
         true,  // SYN flag - Set to true for SYN packet
         false, // FIN flag
-        0,     // window size
+        65535, // window size
         0,     // checksum (will be computed later)
         0,     // urgent pointer
         vec![0],
