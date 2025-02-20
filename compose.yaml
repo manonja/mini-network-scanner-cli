@@ -1,0 +1,5 @@
+services:
+  devnode:
+    build: .
+    volumes: 
+      - .:/home/developer/app

@@ -16,45 +16,44 @@ RUN apt-get update && apt-get install -y \
     tcpdump \
     tmux \
     vim \
+    netcat-openbsd \
+    nmap \
     && rm -rf /var/lib/apt/lists/*
 
 # Deminimize Ubuntu
 RUN yes | unminimize
 
+
+
 # Create a non-root user
 RUN useradd -m -s /bin/bash developer
 
-# Give developer user sudo access without password
+# Give developer user sudo access without a password
 RUN echo "developer ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/developer && \
     chmod 0440 /etc/sudoers.d/developer
 
-# Switch to developer user
+# Set the working directory for the application as the developer
+WORKDIR /home/developer/app
+
+# Copy all project files from your build context into the container
+COPY . .
+
+# Fix the permissions so that the developer user owns the project files
+RUN chown -R developer:developer /home/developer/app
+
+# Switch to the developer user
 USER developer
 
 # Create .cargo directory for developer user
 RUN mkdir -p /home/developer/.cargo
 
-
 # Install Rust
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 ENV PATH="/home/developer/.cargo/bin:${PATH}"
 
-# Copy all project files
-# To run the container with the current directory mounted:
-# docker run -it -v $(pwd):/home/developer/app <image-name>
-VOLUME ["/home/developer/app"]
-
-# # Compile tcp-dump
-WORKDIR /home/developer/app/tcp-server
-# RUN gcc -o tcp-dump tcp-dump.c
 
 
-# # Return to app directory
-# WORKDIR /app
 
-# # Make tmux script executable
-# RUN chmod +x tmux-setup.sh
-
+# (Optional) Other steps like exposing ports or starting scripts can remain commented out.
 # EXPOSE 8080
-
 # CMD ["./tmux-setup.sh"]

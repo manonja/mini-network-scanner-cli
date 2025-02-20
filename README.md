@@ -1,6 +1,6 @@
 # Mini Network Scanner CLI 🔍
 
-A lightweight command-line tool written in Rust for basic network scanning operations. Currently supports HTTP port (80) scanning functionality. 
+A lightweight command-line tool written in Rust for basic network scanning operations on Linux. Currently supports HTTP port (80) scanning functionality. 
 
 ## Quick Start
 
@@ -11,6 +11,20 @@ A lightweight command-line tool written in Rust for basic network scanning opera
 ```bash
 cargo build --release
 ```
+
+4. Build and run Docker to run the program on Linux (Ubuntu)
+
+```bash
+docker build -t my-rust-debug . && docker run -it --name my-rust-debug -v $(pwd):/home/developer/app my-rust-debug
+```
+
+5. In Docker:
+
+```bash
+$ ~/app cargo build &&  sudo ./target/debug/maja-scan --scan 127.0.0.1:8080 --src 127.0.0.1
+
+```
+
 
 ## Usage
 
