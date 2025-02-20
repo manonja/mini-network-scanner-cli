@@ -22,6 +22,57 @@ pub enum PortState {
     Filtered,
 }
 
+/// Processes a received packet buffer and, if valid, returns a PortState.
+/// Returns `None` if the packet is incomplete or is our own echoed packet.
+fn process_received_packet(
+    buf: &[u8],
+    source_ip: &Ipv4Addr,
+    destination_port: u16,
+) -> Option<PortState> {
+    // Ensure we have at least the minimum IP header length.
+    if buf.len() < 20 {
+        println!("Not a full IP header yet, skipping.");
+        return None;
+    }
+
+    // Extract the source IP from the IP header (bytes 12-15).
+    let received_source_ip = Ipv4Addr::new(buf[12], buf[13], buf[14], buf[15]);
+    if received_source_ip == *source_ip {
+        println!(
+            "Received our own packet (source IP: {}), skipping.",
+            received_source_ip
+        );
+        return None;
+    }
+
+    // Determine IP header length (in bytes)
+    let ip_header_len = (buf[0] & 0x0f) * 4;
+    if buf.len() < (ip_header_len as usize + 20) {
+        println!("Not enough bytes for a TCP header, skipping.");
+        return None;
+    }
+
+    // The TCP header follows immediately after the IP header.
+    let tcp_header = &buf[ip_header_len as usize..];
+    let tcp_flags = tcp_header[13];
+    println!("TCP flags: 0x{:02x}", tcp_flags);
+
+    // Check the flags.
+    if tcp_flags & 0x12 == 0x12 {
+        println!("Port {} is OPEN 🟢 (SYN+ACK received).", destination_port);
+        Some(PortState::Open)
+    } else if tcp_flags & 0x04 == 0x04 {
+        println!("Port {} is CLOSED 🔴 (RST received).", destination_port);
+        Some(PortState::Closed)
+    } else {
+        println!(
+            "Port {} response unknown 🟡. Marking as filtered.",
+            destination_port
+        );
+        Some(PortState::Filtered)
+    }
+}
+
 pub fn tcp_syn_scan(
     source_ip: &Ipv4Addr,
     destination_ip: &Ipv4Addr,
@@ -99,7 +150,7 @@ pub fn tcp_syn_scan(
         match res {
             Ok(num_bytes_received) => {
                 if num_bytes_received == 0 {
-                    println!("I continue!!");
+                    println!("No data received, I continue!!");
 
                     continue; //nothing received, try again
                 }
@@ -119,40 +170,47 @@ pub fn tcp_syn_scan(
                     continue;
                 }
 
-                let ip_header_len = (buf[0] & 0x0f) * 4; // IP header length in bytes
-                if num_bytes_received < (ip_header_len as usize + 20) {
-                    // Not enough bytes for a TCP header; continue waiting.
-                    println!("Not enough bytes for a TCP header, I continue! !");
-                    continue;
+                // Process the received packet.
+                if let Some(port_state) = process_received_packet(buf, source_ip, destination_port)
+                {
+                    return Ok(port_state);
                 }
+                // Otherwise, keep waiting.
 
-                // The TCP header starts immediately after the IP header
-                let tcp_header = &buf[ip_header_len as usize..];
-                // Considering the TCP layout:
-                // Bytes 0-1: source port, 2-3: dest port, 4-7: sequence number,
-                // 8-11: ack number, 12: data offset/reserved, 13: flags, etc.
-                let tcp_flags = tcp_header[13];
-                println!("TCP flags: 0x{:02x}", tcp_flags);
+                // let ip_header_len = (buf[0] & 0x0f) * 4; // IP header length in bytes
+                // if num_bytes_received < (ip_header_len as usize + 20) {
+                //     // Not enough bytes for a TCP header; continue waiting.
+                //     println!("Not enough bytes for a TCP header, I continue! !");
+                //     continue;
+                // }
 
-                // 10. Interprect the flags
-                // If we receive a SYN+ACK (SYN = 0x02 and ACK = 0x10), the port is open
-                if tcp_flags & 0x12 == 0x12 {
-                    println!("Port {} is OPEN 🟢 (SYN+ACK received).", destination_port);
-                    return Ok(PortState::Open);
-                }
-                // If we receive a RST (Reset flag 0x04) then the port is closed.
-                else if tcp_flags & 0x04 == 0x04 {
-                    println!("Port {} is CLOSED 🔴 (RST received).", destination_port);
-                    return Ok(PortState::Closed);
-                }
-                // Otherwise, the response is not conclusive; break or return filtered.
-                else {
-                    println!(
-                        "Port {} response unknown 🟡. Marking as filtered.",
-                        destination_port
-                    );
-                    return Ok(PortState::Filtered);
-                }
+                // // The TCP header starts immediately after the IP header
+                // let tcp_header = &buf[ip_header_len as usize..];
+                // // Considering the TCP layout:
+                // // Bytes 0-1: source port, 2-3: dest port, 4-7: sequence number,
+                // // 8-11: ack number, 12: data offset/reserved, 13: flags, etc.
+                // let tcp_flags = tcp_header[13];
+                // println!("TCP flags: 0x{:02x}", tcp_flags);
+
+                // // 10. Interprect the flags
+                // // If we receive a SYN+ACK (SYN = 0x02 and ACK = 0x10), the port is open
+                // if tcp_flags & 0x12 == 0x12 {
+                //     println!("Port {} is OPEN 🟢 (SYN+ACK received).", destination_port);
+                //     return Ok(PortState::Open);
+                // }
+                // // If we receive a RST (Reset flag 0x04) then the port is closed.
+                // else if tcp_flags & 0x04 == 0x04 {
+                //     println!("Port {} is CLOSED 🔴 (RST received).", destination_port);
+                //     return Ok(PortState::Closed);
+                // }
+                // // Otherwise, the response is not conclusive; break or return filtered.
+                // else {
+                //     println!(
+                //         "Port {} response unknown 🟡. Marking as filtered.",
+                //         destination_port
+                //     );
+                //     return Ok(PortState::Filtered);
+                // }
             }
             Err(e) => {
                 // If the error is a timeout (WouldBlock or TimedOut), assume no response.
