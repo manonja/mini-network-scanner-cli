@@ -50,14 +50,6 @@ fn process_received_packet(
     let tcp_header = &buf[ip_header_len as usize..];
     let received_dest_port = u16::from_be_bytes([tcp_header[2], tcp_header[3]]);
 
-    // if received_source_ip == *source_ip {
-    //     println!(
-    //         "Received our own packet (source IP: {}), skipping.",
-    //         received_source_ip
-    //     );
-    //     return None;
-    // }
-
     if received_source_ip != *source_ip {
         println!("Not from target IP: {}, skipping", source_ip);
         return None;
