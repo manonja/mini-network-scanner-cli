@@ -1,128 +1,112 @@
-# Mini Network Scanner CLI 🔍
+# 🔍 Mini Network Scanner CLI
 
-A lightweight command-line tool written in Rust for basic network scanning operations on Linux. Currently supports HTTP port (80) scanning functionality. 
+A lightweight, fast, and efficient command-line network scanning tool written in Rust. This tool allows you to perform TCP SYN scans and retrieve basic system information with minimal overhead. **Note: This tool must run within Docker due to its requirements for raw socket operations on Linux.**
 
-## Quick Start
+![Rust Version](https://img.shields.io/badge/rust-2021_edition-orange.svg)
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![Status](https://img.shields.io/badge/status-active-green.svg)
+![Platform](https://img.shields.io/badge/platform-docker-blue.svg)
 
-1. Ensure you have Rust installed on your system
-2. Clone this repository
-3. Build the project:
+## 📋 Table of Contents
+- [🔍 Mini Network Scanner CLI](#-mini-network-scanner-cli)
+  - [📋 Table of Contents](#-table-of-contents)
+  - [✨ Features](#-features)
+  - [🔧 Prerequisites](#-prerequisites)
+  - [📥 Installation \& Usage](#-installation--usage)
+    - [Example](#example)
+  - [📁 Project Structure](#-project-structure)
+  - [🛠️ Technologies Used](#️-technologies-used)
+  - [🤝 Contributing](#-contributing)
+  - [📝 License](#-license)
 
+## ✨ Features
+
+- **TCP SYN Port Scanning**: Port scanning using TCP SYN packets
+- **Custom Source IP**: Ability to specify custom source IP addresses for scans
+- **HTTP Port Detection**: Scanning for HTTP services (port 80)
+- **User-Friendly CLI**: Simple command-line interface
+- **Performance**: Written in Rust for performance and safety
+- **Containerized**: Runs in Docker for consistent behavior and proper raw socket handling
+
+## 🔧 Prerequisites
+
+- Docker (required)
+- Docker Compose (required)
+- Git (for cloning the repository)
+
+Note: While the project is written in Rust, you don't need Rust installed locally as the build process happens within Docker.
+
+## 📥 Installation & Usage
+
+This project must run within Docker due to its requirements for raw socket operations on Linux. Here's how to get started:
+
+1. Clone the repository:
 ```bash
-cargo build --release
+git clone https://github.com/manonja/mini-network-scanner-cli.git
+cd mini-network-scanner-cli
 ```
 
-4. Build and run Docker to run the program on Linux (Ubuntu)
-
+2. Build the Docker container:
 ```bash
-docker build -t my-rust-debug . && docker run -it --name my-rust-debug -v $(pwd):/home/developer/app my-rust-debug
+docker compose build
 ```
 
-5. In Docker:
-
+3. Run the scanner:
 ```bash
-$ ~/app cargo build &&  sudo ./target/debug/maja-scan --scan 127.0.0.1:8080 --src 127.0.0.1
+# Display help information
+docker compose run scanner --help
+docker compose run scanner -h
 
+# Perform a TCP SYN scan
+docker compose run scanner --scan <ip_address>:<port> --src <source_ip>
+docker compose run scanner -s <ip_address>:<port> -r <source_ip>
 ```
 
-
-## Usage
-
-The CLI supports the following commands:
-
+### Example
 ```bash
-# Get help and usage information
-cli --help
-cli -h
-
-# Scan port 80 on a specific IP address
-cli --scan <ip_address>
-cli -s <ip_address>
+docker compose run scanner --scan 192.168.1.1:80 --src 192.168.1.2
 ```
 
-### Examples
+## 📁 Project Structure
 
-```bash
-# Scan localhost
-cli --scan 127.0.0.1
-
-# Scan a router (typical address)
-cli --scan 192.168.1.1
+```
+.
+├── src/
+│   ├── main.rs        # Entry point and CLI handling
+│   ├── scan.rs        # Core scanning functionality
+│   ├── hextools.rs    # Hex manipulation utilities
+│   └── net/           # Network-related modules
+├── Dockerfile         # Docker configuration
+├── compose.yaml       # Docker Compose configuration
+└── Cargo.toml        # Project dependencies and metadata
 ```
 
-## Technical Details
+## 🛠️ Technologies Used
 
-The scanner performs the following checks:
-- Attempts to establish a TCP connection to port 80
-- Uses a 1-second timeout for connection attempts
-- Returns clear status messages about port accessibility
+- **[Rust](https://www.rust-lang.org/)** - Systems programming language
+- **[pnet_packet](https://crates.io/crates/pnet_packet)** - Network packet manipulation
+- **[socket2](https://crates.io/crates/socket2)** - Socket operations
+- **[Docker](https://www.docker.com/)** - Required for running the application
 
-### Output Format
+## 🤝 Contributing
 
-- Success: "Port 80 is open on {ip}"
-- Failure: "Port 80 is closed on {ip}"
+Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
 
-## Development
+1. Fork the Project
+2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the Branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
 
-### Linters
+Note: Make sure to test your changes within Docker as the project requires Linux for raw socket operations.
 
-1. Format your code:
-```bash
-cargo fmt
-```
-Running this command reformats all the Rust code in the current crate. This should only change the code style, not the code semantics.
+## 📝 License
 
-2. Check for code style issues:
-```bash
-cargo clippy
-```
-Running this command checks the Rust code in the current crate for any code style issues.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-3. Fix code with rustfix:
-```bash
-cargo fix
-```
-The rustfix tool is included with Rust installations and can automatically fix compiler warnings that have a clear way to correct the problem.
+---
 
-### Pre-commit Hooks
-
-The following hooks are configured:
-- `cargo-fmt`: Formats your Rust code using rustfmt
-- `cargo-clippy`: Runs clippy to catch common mistakes
-- `cargo-build`: Ensures your project builds successfully
-
-#### Setting up Pre-commit Hooks
-
-1. Install pre-commit hooks in your repository:
-```bash
-pre-commit install
-```
-This sets up a Git hook that runs your defined checks every time you commit.
-
-2. Run Pre-Commit Manually:
-```bash
-pre-commit run --all-files
-```
-Use this command to test the hooks before making your first commit.
-
-## Limitations
-
-- Only scans HTTP port (80)
-- Basic TCP connection check only
-- No service verification
-- Some firewalls may block the scan
-
-## Security Note
-
-Please use this tool responsibly and only on networks you own or have explicit permission to scan.
-
-## License
-
-This project is open source and available under the MIT License.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
+Made with 💜 by Manon Jacquin
 
 
 
