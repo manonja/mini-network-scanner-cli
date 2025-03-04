@@ -28,6 +28,7 @@ fn process_received_packet(
     buf: &[u8],
     source_ip: &Ipv4Addr,
     destination_port: u16,
+    our_source_port: u16,
 ) -> Option<PortState> {
     // Ensure we have at least the minimum IP header length.
     if buf.len() < 20 {
@@ -37,13 +38,6 @@ fn process_received_packet(
 
     // Extract the source IP from the IP header (bytes 12-15).
     let received_source_ip = Ipv4Addr::new(buf[12], buf[13], buf[14], buf[15]);
-    if received_source_ip == *source_ip {
-        println!(
-            "Received our own packet (source IP: {}), skipping.",
-            received_source_ip
-        );
-        return None;
-    }
 
     // Determine IP header length (in bytes)
     let ip_header_len = (buf[0] & 0x0f) * 4;
@@ -54,6 +48,29 @@ fn process_received_packet(
 
     // The TCP header follows immediately after the IP header.
     let tcp_header = &buf[ip_header_len as usize..];
+    let received_dest_port = u16::from_be_bytes([tcp_header[2], tcp_header[3]]);
+
+    // if received_source_ip == *source_ip {
+    //     println!(
+    //         "Received our own packet (source IP: {}), skipping.",
+    //         received_source_ip
+    //     );
+    //     return None;
+    // }
+
+    if received_source_ip != *source_ip {
+        println!("Not from target IP: {}, skipping", source_ip);
+        return None;
+    }
+
+    if received_dest_port != our_source_port {
+        println!(
+            "Packet not destined for our ephemeral port {} (got {}) - skipping.",
+            our_source_port, received_dest_port
+        );
+        return None;
+    }
+
     let tcp_flags = tcp_header[13];
     println!("TCP flags: 0x{:02x}", tcp_flags);
 
@@ -171,7 +188,8 @@ pub fn tcp_syn_scan(
                 }
 
                 // Process the received packet.
-                if let Some(port_state) = process_received_packet(buf, source_ip, destination_port)
+                if let Some(port_state) =
+                    process_received_packet(buf, source_ip, destination_port, source_port)
                 {
                     return Ok(port_state);
                 }
